@@ -397,16 +397,16 @@ export default function Home() {
     <main className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen">
         <aside className="hidden w-64 shrink-0 border-r border-border bg-sidebar px-4 py-5 lg:block">
-          <div className="flex flex-col items-start gap-3 px-2">
+          <div className="flex flex-col items-center gap-3 px-2 text-center">
             <Image
               src="/dv-logo.png"
               alt="DV"
-              width={78}
-              height={78}
+              width={128}
+              height={88}
               className="rounded-md border border-border bg-white object-contain p-2"
             />
             <div>
-              <p className="text-base font-semibold">WhatsApp Reachout</p>
+              <p className="text-lg font-semibold">WhatsApp Reachout</p>
               <p className="text-xs text-muted-foreground">Lead campaign OS</p>
             </div>
           </div>
