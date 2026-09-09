@@ -125,19 +125,29 @@ export async function getWnsClient() {
 
 export function buildWnsFilter({
   city,
+  cities,
   course,
+  courses,
   search,
 }: {
   city?: string;
+  cities?: string[];
   course?: string;
+  courses?: string[];
   search?: string;
 }) {
   const filter: Filter<SyncedLeadDocument> = {};
-  if (city && city !== 'all') {
-    filter.city = city;
+  const cityValues = cleanFilterValues(
+    cities?.length ? cities : city ? [city] : [],
+  );
+  const courseValues = cleanFilterValues(
+    courses?.length ? courses : course ? [course] : [],
+  );
+  if (cityValues.length) {
+    filter.city = { $in: cityValues };
   }
-  if (course && course !== 'all') {
-    filter.company = course;
+  if (courseValues.length) {
+    filter.company = { $in: courseValues };
   }
   if (search?.trim()) {
     const term = escapeRegex(search.trim());
@@ -271,4 +281,10 @@ function scoreLead(stage: string) {
 
 function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function cleanFilterValues(values: string[]) {
+  return values
+    .map((value) => value.trim())
+    .filter((value) => value && value !== 'all');
 }

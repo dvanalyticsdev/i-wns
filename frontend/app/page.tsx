@@ -93,6 +93,13 @@ type ArchiveResponse = {
   lastSyncedAt?: string | null;
 };
 
+type SyncResult = {
+  syncedCount?: number;
+  storedCount?: number;
+  syncedAt?: string;
+  message?: string;
+};
+
 type TemplateRecord = {
   id: string;
   name: string;
@@ -254,23 +261,29 @@ export default function Home() {
 
   async function loadArchivePage({
     page = 1,
-    city = 'all',
-    course = 'all',
+    cities = [],
+    courses = [],
     search = '',
+    silent = false,
   }: {
     page?: number;
-    city?: string;
-    course?: string;
+    cities?: string[];
+    courses?: string[];
     search?: string;
+    silent?: boolean;
   } = {}) {
     setArchive((current) => ({ ...current, status: 'loading' }));
     const params = new URLSearchParams({
       page: String(page),
       limit: '100',
-      city,
-      course,
       search,
     });
+    if (cities.length) {
+      params.set('cities', cities.join(','));
+    }
+    if (courses.length) {
+      params.set('courses', courses.join(','));
+    }
     const response = await fetch(`/api/archive-leads?${params.toString()}`, {
       cache: 'no-store',
     });
@@ -281,30 +294,23 @@ export default function Home() {
       return;
     }
     setArchive(data);
-    setNotice(
-      response.ok
-        ? `${data.archiveCount.toLocaleString()} synced leads available in i-wns.`
-        : data.message || 'Unable to load i-wns leads.',
-    );
+    if (!silent) {
+      setNotice(
+        response.ok
+          ? `${data.archiveCount.toLocaleString()} synced leads available in i-wns.`
+          : data.message || 'Unable to load i-wns leads.',
+      );
+    }
   }
 
-  async function syncCrmLeads() {
-    setNotice('Syncing Main Admission archive leads from i-crm.');
+  async function syncCrmLeads(): Promise<SyncResult> {
     const response = await fetch('/api/crm-sync', { method: 'POST' });
-    const data = (await response.json()) as {
-      status?: string;
-      storedCount?: number;
-      syncedCount?: number;
-      message?: string;
-    };
+    const data = (await response.json()) as SyncResult;
     if (!response.ok) {
-      setNotice(data.message || 'CRM sync failed.');
-      return;
+      throw new Error(data.message || 'CRM sync failed.');
     }
-    await loadArchivePage({ page: 1 });
-    setNotice(
-      `Synced ${Number(data.syncedCount || 0).toLocaleString()} CRM leads into i-wns.`,
-    );
+    await loadArchivePage({ page: 1, silent: true });
+    return data;
   }
 
   async function handleLogin(event: { preventDefault: () => void }) {
@@ -350,16 +356,16 @@ export default function Home() {
     <main className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen">
         <aside className="hidden w-64 shrink-0 border-r border-border bg-sidebar px-4 py-5 lg:block">
-          <div className="flex items-center gap-3 px-2">
+          <div className="flex flex-col items-start gap-3 px-2">
             <Image
               src="/dv-logo.png"
               alt="DV"
-              width={42}
-              height={42}
-              className="rounded-md border border-border bg-white object-contain p-1"
+              width={78}
+              height={78}
+              className="rounded-md border border-border bg-white object-contain p-2"
             />
             <div>
-              <p className="text-sm font-semibold">WhatsApp Reachout</p>
+              <p className="text-base font-semibold">WhatsApp Reachout</p>
               <p className="text-xs text-muted-foreground">Lead campaign OS</p>
             </div>
           </div>
@@ -553,19 +559,16 @@ function DashboardView({
           icon={Archive}
           label="Archived leads"
           value={archive.archiveCount.toLocaleString()}
-          detail="Main Admission Calling"
         />
         <Metric
           icon={Send}
           label="Reached out"
           value={reachedOut.toLocaleString()}
-          detail="sent through i-wns"
         />
         <Metric
           icon={Check}
           label="Converted"
           value={converted.toLocaleString()}
-          detail="webinar conversions"
         />
       </section>
 
@@ -690,6 +693,11 @@ function TemplatesView({
           <p className="text-sm text-muted-foreground">
             Manage message text and media before using a template in Reach Out.
           </p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Category follows WhatsApp template rules: Marketing for offers and
+            webinar invites, Utility for updates/reminders, Authentication for
+            OTP or login codes.
+          </p>
         </div>
         {templates.length ? (
           <div className="grid gap-3 p-4">
@@ -796,9 +804,10 @@ function ReachOutView({
   templates: TemplateRecord[];
   loadArchivePage: (params: {
     page?: number;
-    city?: string;
-    course?: string;
+    cities?: string[];
+    courses?: string[];
     search?: string;
+    silent?: boolean;
   }) => Promise<void>;
   setBatches: (updater: (batches: BatchRecord[]) => BatchRecord[]) => void;
   setActiveView: (view: ViewId) => void;
@@ -807,10 +816,12 @@ function ReachOutView({
 }) {
   const [batchName, setBatchName] = useState('');
   const [templateId, setTemplateId] = useState('');
-  const [city, setCity] = useState('all');
-  const [course, setCourse] = useState('all');
+  const [selectedCities, setSelectedCities] = useState<string[]>([]);
+  const [selectedCourses, setSelectedCourses] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
+  const [selectionCount, setSelectionCount] = useState('500');
+  const [selecting, setSelecting] = useState(false);
 
   const currentPage = archive.page || 1;
   const totalPages = archive.totalPages || 1;
@@ -819,13 +830,53 @@ function ReachOutView({
   const cities = archive.cities || [];
   const courses = archive.courses || [];
 
-  function loadPage(nextPage: number, nextCity = city, nextCourse = course) {
+  function loadPage(
+    nextPage: number,
+    nextCities = selectedCities,
+    nextCourses = selectedCourses,
+  ) {
     return loadArchivePage({
       page: nextPage,
-      city: nextCity,
-      course: nextCourse,
+      cities: nextCities,
+      courses: nextCourses,
       search,
     });
+  }
+
+  async function selectFilteredLimit() {
+    const requested = Math.max(Number(selectionCount || '0'), 1);
+    setSelecting(true);
+    try {
+      const params = new URLSearchParams({
+        limit: String(requested),
+        search,
+      });
+      if (selectedCities.length) {
+        params.set('cities', selectedCities.join(','));
+      }
+      if (selectedCourses.length) {
+        params.set('courses', selectedCourses.join(','));
+      }
+      const response = await fetch(
+        `/api/archive-leads/selection?${params.toString()}`,
+        { cache: 'no-store' },
+      );
+      const data = (await response.json()) as {
+        leadIds?: string[];
+        selectedCount?: number;
+        message?: string;
+      };
+      if (!response.ok) {
+        setNotice(data.message || 'Unable to select filtered leads.');
+        return;
+      }
+      setSelectedLeadIds(data.leadIds || []);
+      setNotice(
+        `Selected ${Number(data.selectedCount || 0).toLocaleString()} leads from current filters.`,
+      );
+    } finally {
+      setSelecting(false);
+    }
   }
 
   function toggleLead(id: string) {
@@ -874,62 +925,27 @@ function ReachOutView({
             batch, then send.
           </p>
         </div>
-        <div className="grid gap-3 border-b border-border p-4 md:grid-cols-3">
-          <Select
-            value={city}
-            onValueChange={(value) => {
-              if (!value) return;
-              setCity(value);
-              void loadPage(1, value, course);
+        <div className="grid gap-3 border-b border-border p-4 md:grid-cols-2">
+          <MultiSelectFilter
+            label="Location"
+            options={cities}
+            selected={selectedCities}
+            onChange={(values) => {
+              setSelectedCities(values);
+              void loadPage(1, values, selectedCourses);
             }}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Location" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All locations</SelectItem>
-              {cities.map((value) => (
-                <SelectItem key={value} value={value}>
-                  {value}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={course}
-            onValueChange={(value) => {
-              if (!value) return;
-              setCourse(value);
-              void loadPage(1, city, value);
+          />
+          <MultiSelectFilter
+            label="Course"
+            options={courses}
+            selected={selectedCourses}
+            onChange={(values) => {
+              setSelectedCourses(values);
+              void loadPage(1, selectedCities, values);
             }}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Course" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All courses</SelectItem>
-              {courses.map((value) => (
-                <SelectItem key={value} value={value}>
-                  {value}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            onClick={() =>
-              setSelectedLeadIds((current) =>
-                Array.from(
-                  new Set([...current, ...visibleLeads.map((lead) => lead.id)]),
-                ),
-              )
-            }
-          >
-            <Users className="size-4" />
-            Select visible
-          </Button>
+          />
         </div>
-        <div className="grid gap-3 border-b border-border p-4 md:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="grid gap-3 border-b border-border p-4 md:grid-cols-[minmax(0,1fr)_auto_auto]">
           <div className="relative">
             <Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
             <Input
@@ -942,10 +958,28 @@ function ReachOutView({
           <Button
             variant="outline"
             onClick={() =>
-              void loadArchivePage({ city, course, page: 1, search })
+              void loadArchivePage({
+                cities: selectedCities,
+                courses: selectedCourses,
+                page: 1,
+                search,
+              })
             }
           >
             Search
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() =>
+              setSelectedLeadIds((current) =>
+                Array.from(
+                  new Set([...current, ...visibleLeads.map((lead) => lead.id)]),
+                ),
+              )
+            }
+          >
+            <Users className="size-4" />
+            Select page
           </Button>
         </div>
         <div className="flex flex-col gap-2 border-b border-border px-4 py-3 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
@@ -1019,47 +1053,85 @@ function ReachOutView({
         )}
       </section>
 
-      <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-lg font-semibold">Send batch</h2>
-        <div className="mt-4 space-y-3">
-          <Input
-            value={batchName}
-            onChange={(event) => setBatchName(event.target.value)}
-            placeholder="Batch name"
-          />
-          <Select
-            value={templateId}
-            onValueChange={(value) => value && setTemplateId(value)}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Choose template" />
-            </SelectTrigger>
-            <SelectContent>
-              {templates.length ? (
-                templates.map((template) => (
-                  <SelectItem key={template.id} value={template.id}>
-                    {template.name}
-                  </SelectItem>
-                ))
-              ) : (
-                <SelectItem value="none">No templates added</SelectItem>
-              )}
-            </SelectContent>
-          </Select>
-          <div className="rounded-lg bg-muted p-3">
-            <p className="text-sm font-medium">Selected leads</p>
-            <p className="text-3xl font-semibold">{selectedLeadIds.length}</p>
+      <div className="space-y-4">
+        <section className="rounded-lg border border-border bg-card p-4">
+          <h2 className="text-lg font-semibold">Selection panel</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Select a larger set from the current filters, independent of the
+            100-row page.
+          </p>
+          <div className="mt-4 space-y-3">
+            <Input
+              min={1}
+              max={5000}
+              type="number"
+              value={selectionCount}
+              onChange={(event) => setSelectionCount(event.target.value)}
+              placeholder="500, 1000, or any number"
+            />
+            <Button
+              className="w-full"
+              variant="outline"
+              disabled={selecting}
+              onClick={() => void selectFilteredLimit()}
+            >
+              <Users className="size-4" />
+              {selecting ? 'Selecting leads' : 'Select from filters'}
+            </Button>
+            <Button
+              className="w-full"
+              variant="outline"
+              onClick={() => setSelectedLeadIds([])}
+            >
+              Clear selection
+            </Button>
           </div>
-          <Button
-            className="w-full"
-            onClick={sendBatch}
-            disabled={!templates.length}
-          >
-            <Send className="size-4" />
-            Send message
-          </Button>
-        </div>
-      </section>
+        </section>
+
+        <section className="rounded-lg border border-border bg-card p-4">
+          <h2 className="text-lg font-semibold">Send batch</h2>
+          <div className="mt-4 space-y-3">
+            <Input
+              value={batchName}
+              onChange={(event) => setBatchName(event.target.value)}
+              placeholder="Batch name"
+            />
+            <Select
+              value={templateId}
+              onValueChange={(value) => value && setTemplateId(value)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Choose template" />
+              </SelectTrigger>
+              <SelectContent>
+                {templates.length ? (
+                  templates.map((template) => (
+                    <SelectItem key={template.id} value={template.id}>
+                      {template.name}
+                    </SelectItem>
+                  ))
+                ) : (
+                  <SelectItem value="none">No templates added</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+            <div className="rounded-lg bg-muted p-3">
+              <p className="text-sm font-medium">Selected leads</p>
+              <p className="text-3xl font-semibold">
+                {selectedLeadIds.length.toLocaleString()}
+              </p>
+            </div>
+            <Button
+              className="w-full"
+              onClick={sendBatch}
+              disabled={!templates.length}
+            >
+              <Send className="size-4" />
+              Send message
+            </Button>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
@@ -1194,46 +1266,111 @@ function ReportingView({
   );
 }
 
+function MultiSelectFilter({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  onChange: (selected: string[]) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const visibleOptions = options
+    .filter((option) => option.toLowerCase().includes(query.toLowerCase()))
+    .slice(0, 80);
+  const summary = selected.length
+    ? `${selected.length} selected`
+    : `All ${label.toLowerCase()}s`;
+
+  function toggle(value: string) {
+    onChange(
+      selected.includes(value)
+        ? selected.filter((item) => item !== value)
+        : [...selected, value],
+    );
+  }
+
+  return (
+    <details className="rounded-lg border border-input bg-background">
+      <summary className="flex h-10 cursor-pointer list-none items-center justify-between gap-3 px-3 text-sm">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="truncate font-medium">{summary}</span>
+      </summary>
+      <div className="border-t border-border p-3">
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={`Search ${label.toLowerCase()}`}
+        />
+        <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+          <button
+            className="font-medium text-primary"
+            onClick={() => onChange([])}
+          >
+            Clear
+          </button>
+          <span>{options.length.toLocaleString()} options</span>
+        </div>
+        <div className="mt-3 max-h-56 space-y-1 overflow-auto">
+          {visibleOptions.map((option) => (
+            <label
+              key={option}
+              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted"
+            >
+              <input
+                checked={selected.includes(option)}
+                onChange={() => toggle(option)}
+                type="checkbox"
+              />
+              <span className="truncate">{option}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    </details>
+  );
+}
+
 function SyncView({
   archive,
   onSyncCrm,
 }: {
   archive: ArchiveResponse;
-  onSyncCrm: () => Promise<void>;
+  onSyncCrm: () => Promise<SyncResult>;
 }) {
   const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState('');
 
   async function handleSync() {
     setSyncing(true);
+    setSyncResult('Starting sync from i-crm read-only source.');
     try {
-      await onSyncCrm();
+      const result = await onSyncCrm();
+      setSyncResult(
+        `Done: ${Number(result.syncedCount || 0).toLocaleString()} leads checked and ${Number(result.storedCount || 0).toLocaleString()} leads stored in i-wns.`,
+      );
+    } catch (error) {
+      setSyncResult(
+        error instanceof Error ? error.message : 'CRM sync failed.',
+      );
     } finally {
       setSyncing(false);
     }
   }
 
   return (
-    <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+    <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-[360px_minmax(0,1fr)]">
       <section className="rounded-lg border border-border bg-card p-4">
         <h2 className="text-lg font-semibold">CRM connection</h2>
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <div className="mt-4">
           <Metric
             icon={Users}
             label="Archive leads"
             value={archive.archiveCount.toLocaleString()}
-            detail={connectionText(archive)}
-          />
-          <Metric
-            icon={Archive}
-            label="Collection"
-            value={archive.collection || '-'}
-            detail={archive.database || 'i-wns database'}
-          />
-          <Metric
-            icon={RefreshCw}
-            label="Sync mode"
-            value="Live"
-            detail="loads through API"
+            detail="stored in i-wns"
           />
         </div>
         <div className="mt-4 rounded-lg border border-border bg-background p-4">
@@ -1245,16 +1382,20 @@ function SyncView({
         </div>
       </section>
       <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-lg font-semibold">Sync controls</h2>
-        <div className="mt-4 space-y-3">
-          <ControlRow label="Pull Main Admission archive from i-crm" checked />
-          <ControlRow label="Keep i-crm read-only from i-wns" checked />
-          <ControlRow label="Store WhatsApp batches in i-wns only" checked />
-          <Button className="w-full" disabled={syncing} onClick={handleSync}>
-            <RefreshCw className="size-4" />
-            {syncing ? 'Syncing leads' : 'Sync CRM leads'}
-          </Button>
-        </div>
+        <h2 className="text-lg font-semibold">Sync now</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Copies Main Admission archived leads from i-crm into the i-wns
+          database for outreach filtering and paging.
+        </p>
+        <Button className="mt-4" disabled={syncing} onClick={handleSync}>
+          <RefreshCw className="size-4" />
+          {syncing ? 'Syncing leads' : 'Sync now'}
+        </Button>
+        {syncResult && (
+          <div className="mt-4 rounded-lg bg-muted p-4 text-sm">
+            {syncResult}
+          </div>
+        )}
       </section>
     </div>
   );
@@ -1262,47 +1403,39 @@ function SyncView({
 
 function SettingsView({ setNotice }: { setNotice: (notice: string) => void }) {
   return (
-    <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-2">
+    <div className="px-4 py-5 md:px-6">
       <section className="rounded-lg border border-border bg-card p-4">
         <h2 className="text-lg font-semibold">WhatsApp sending rules</h2>
         <div className="mt-4 space-y-3">
           <ControlRow
             label="Require opt-in before marketing templates"
+            description="Marketing messages should only go to leads who have consented to receive promotional WhatsApp outreach."
             checked
           />
-          <ControlRow label="Stop sending when lead replies STOP" checked />
+          <ControlRow
+            label="Stop sending when lead replies STOP"
+            description="When a lead opts out, future campaign batches should skip that phone number."
+            checked
+          />
           <ControlRow
             label="Limit marketing retries to two per month"
+            description="Prevents repeated messaging to the same lead too often, reducing spam complaints and quality risk."
             checked
           />
-          <ControlRow label="Pause batch on high failure rate" checked />
+          <ControlRow
+            label="Pause batch on high failure rate"
+            description="If too many sends fail, the system should stop the batch so phone/template issues can be checked."
+            checked
+          />
         </div>
       </section>
-      <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-lg font-semibold">Access and exports</h2>
-        <div className="mt-4 space-y-3">
-          <Input placeholder="Notification email" />
-          <Select defaultValue="xlsx">
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="xlsx">Excel export</SelectItem>
-              <SelectItem value="csv">CSV export</SelectItem>
-              <SelectItem value="crm">Push to CRM list</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            className="w-full"
-            onClick={() =>
-              setNotice('Settings storage is pending backend setup.')
-            }
-          >
-            <Check className="size-4" />
-            Save settings
-          </Button>
-        </div>
-      </section>
+      <Button
+        className="mt-4"
+        onClick={() => setNotice('Settings storage is pending backend setup.')}
+      >
+        <Check className="size-4" />
+        Save settings
+      </Button>
     </div>
   );
 }
@@ -1316,7 +1449,7 @@ function Metric({
   icon: LucideIcon;
   label: string;
   value: string;
-  detail: string;
+  detail?: string;
 }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4">
@@ -1325,7 +1458,7 @@ function Metric({
         <Icon className="size-4 text-primary" />
       </div>
       <p className="mt-3 text-3xl font-semibold tracking-normal">{value}</p>
-      <p className="mt-1 text-sm text-muted-foreground">{detail}</p>
+      {detail && <p className="mt-1 text-sm text-muted-foreground">{detail}</p>}
     </div>
   );
 }
@@ -1376,14 +1509,23 @@ function LeadTable({ leadsToShow }: { leadsToShow: ArchiveLead[] }) {
 
 function ControlRow({
   label,
+  description,
   checked = false,
 }: {
   label: string;
+  description?: string;
   checked?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between rounded-lg bg-muted p-3">
-      <span className="text-sm font-medium">{label}</span>
+    <div className="flex items-center justify-between gap-4 rounded-lg bg-muted p-3">
+      <span>
+        <span className="block text-sm font-medium">{label}</span>
+        {description && (
+          <span className="mt-1 block text-xs text-muted-foreground">
+            {description}
+          </span>
+        )}
+      </span>
       <Switch defaultChecked={checked} />
     </div>
   );
@@ -1426,10 +1568,4 @@ function buildTrendData(batches: BatchRecord[], templateFilter: string) {
 
 function templateName(templates: TemplateRecord[], id: string) {
   return templates.find((template) => template.id === id)?.name || '-';
-}
-
-function connectionText(archive: ArchiveResponse) {
-  if (archive.status === 'connected') return 'read-only from i-crm';
-  if (archive.status === 'loading') return 'loading from i-crm';
-  return archive.message || 'connection pending';
 }

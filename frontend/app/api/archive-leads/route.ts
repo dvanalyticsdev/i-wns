@@ -24,8 +24,8 @@ export async function GET(request: NextRequest) {
       Math.max(Number(url.searchParams.get('limit') || PAGE_SIZE), 1),
       PAGE_SIZE,
     );
-    const city = url.searchParams.get('city') || 'all';
-    const course = url.searchParams.get('course') || 'all';
+    const cities = parseMultiParam(url.searchParams.get('cities'));
+    const courses = parseMultiParam(url.searchParams.get('courses'));
     const search = url.searchParams.get('search') || '';
 
     const client = await getWnsClient();
@@ -33,23 +33,29 @@ export async function GET(request: NextRequest) {
     const collection = db.collection<SyncedLeadDocument>(
       getLeadCollectionName(),
     );
-    const filter = buildWnsFilter({ city, course, search });
+    const filter = buildWnsFilter({ cities, courses, search });
     const skip = (page - 1) * limit;
 
-    const [archiveCount, filteredCount, docs, cities, courses, lastSynced] =
-      await Promise.all([
-        collection.countDocuments({}),
-        collection.countDocuments(filter),
-        collection
-          .find(filter)
-          .sort({ crmUpdatedAt: -1, crmCreatedAt: -1, syncedAt: -1 })
-          .skip(skip)
-          .limit(limit)
-          .toArray(),
-        collection.distinct('city', {}),
-        collection.distinct('company', {}),
-        collection.findOne({}, { sort: { syncedAt: -1 } }),
-      ]);
+    const [
+      archiveCount,
+      filteredCount,
+      docs,
+      cityFacets,
+      courseFacets,
+      lastSynced,
+    ] = await Promise.all([
+      collection.countDocuments({}),
+      collection.countDocuments(filter),
+      collection
+        .find(filter)
+        .sort({ crmUpdatedAt: -1, crmCreatedAt: -1, syncedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray(),
+      collection.distinct('city', {}),
+      collection.distinct('company', {}),
+      collection.findOne({}, { sort: { syncedAt: -1 } }),
+    ]);
 
     return NextResponse.json({
       status: 'connected',
@@ -59,8 +65,8 @@ export async function GET(request: NextRequest) {
       limit,
       totalPages: Math.max(Math.ceil(filteredCount / limit), 1),
       leads: docs.map(toArchiveLead),
-      cities: cleanFacetValues(cities),
-      courses: cleanFacetValues(courses),
+      cities: cleanFacetValues(cityFacets),
+      courses: cleanFacetValues(courseFacets),
       collection: getLeadCollectionName(),
       database: getWnsDbName(),
       lastSyncedAt: lastSynced?.syncedAt || null,
@@ -96,4 +102,12 @@ function cleanFacetValues(values: unknown[]) {
     .filter((value) => value && value !== '-')
     .sort((a, b) => a.localeCompare(b))
     .slice(0, 250);
+}
+
+function parseMultiParam(value: string | null) {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item && item !== 'all');
 }
