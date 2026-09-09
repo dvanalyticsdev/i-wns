@@ -43,12 +43,7 @@ export async function GET() {
     );
     const archiveFilter = {
       $and: [
-        {
-          $or: [
-            { lsqArchivedLead: true },
-            { counselor: new RegExp(`^${ARCHIVED_COUNSELOR}$`, 'i') },
-          ],
-        },
+        { counselor: new RegExp(`^${ARCHIVED_COUNSELOR}$`, 'i') },
         { leadPipeline: MAIN_ADMISSION_PIPELINE },
       ],
     };
@@ -99,7 +94,7 @@ export async function GET() {
       leads: docs.map(toArchiveLead),
       collection: 'leads',
       archiveRule:
-        'Main Admission Calling only: leadPipeline=main-admission and archived lead rule',
+        'Main Admission Calling only: leadPipeline=main-admission and counselor=Archived Leads',
     });
   } catch (error) {
     return NextResponse.json(
