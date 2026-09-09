@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
 import { MongoClient, type Document } from 'mongodb';
+
+import { isAuthenticated, unauthorizedResponse } from '@/lib/auth';
 
 const ARCHIVED_COUNSELOR = 'Archived Leads';
 const MAIN_ADMISSION_PIPELINE = 'main-admission';
@@ -21,8 +24,12 @@ type ArchiveLead = {
   score: number;
 };
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    if (!isAuthenticated(request)) {
+      return unauthorizedResponse();
+    }
+
     const uri = process.env.MONGODB_URI;
     if (!uri) {
       return NextResponse.json(

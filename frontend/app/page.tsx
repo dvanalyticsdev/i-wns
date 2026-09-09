@@ -80,6 +80,10 @@ type ArchiveResponse = {
   archiveRule?: string;
 };
 
+type SubmitEventLike = {
+  preventDefault: () => void;
+};
+
 const emptyArchive: ArchiveResponse = {
   status: 'idle',
   archiveCount: 0,
@@ -100,6 +104,11 @@ const navItems: Array<{
 ];
 
 export default function Home() {
+  const [authStatus, setAuthStatus] = useState<
+    'checking' | 'authenticated' | 'locked'
+  >('checking');
+  const [passcode, setPasscode] = useState('');
+  const [authError, setAuthError] = useState('');
   const [activeView, setActiveView] = useState<ViewId>('dashboard');
   const [leadFilter, setLeadFilter] = useState('all');
   const [archive, setArchive] = useState<ArchiveResponse>({
@@ -112,6 +121,30 @@ export default function Home() {
 
   useEffect(() => {
     let cancelled = false;
+    async function checkSession() {
+      try {
+        const response = await fetch('/api/auth/session', { cache: 'no-store' });
+        const data = (await response.json()) as { authenticated?: boolean };
+        if (!cancelled) {
+          setAuthStatus(data.authenticated ? 'authenticated' : 'locked');
+        }
+      } catch {
+        if (!cancelled) {
+          setAuthStatus('locked');
+        }
+      }
+    }
+    void checkSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
+    let cancelled = false;
     async function loadArchive() {
       setArchive((current) => ({ ...current, status: 'loading' }));
       try {
@@ -120,6 +153,11 @@ export default function Home() {
         });
         const data = (await response.json()) as ArchiveResponse;
         if (cancelled) {
+          return;
+        }
+        if (response.status === 401) {
+          setAuthStatus('locked');
+          setNotice('Passcode required.');
           return;
         }
         setArchive(data);
@@ -143,7 +181,31 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authStatus]);
+
+  async function handleLogin(event: SubmitEventLike) {
+    event.preventDefault();
+    setAuthError('');
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passcode }),
+    });
+    if (!response.ok) {
+      setAuthError('Incorrect passcode.');
+      return;
+    }
+    setPasscode('');
+    setAuthStatus('authenticated');
+    setNotice('Passcode accepted. Loading i-crm archive.');
+  }
+
+  async function handleLogout() {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    setArchive({ ...emptyArchive, status: 'idle' });
+    setAuthStatus('locked');
+    setNotice('Passcode required.');
+  }
 
   const visibleLeads = useMemo(() => {
     if (leadFilter === 'high-score') {
@@ -163,6 +225,18 @@ export default function Home() {
     sync: 'CRM sync',
     settings: 'Settings',
   }[activeView];
+
+  if (authStatus !== 'authenticated') {
+    return (
+      <PasscodeGate
+        authStatus={authStatus}
+        passcode={passcode}
+        authError={authError}
+        setPasscode={setPasscode}
+        onSubmit={handleLogin}
+      />
+    );
+  }
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -267,6 +341,10 @@ export default function Home() {
                   <Plus className="size-4" />
                   New batch
                 </Button>
+                <Button variant="outline" onClick={handleLogout}>
+                  <ShieldCheck className="size-4" />
+                  Lock
+                </Button>
               </div>
             </div>
           </header>
@@ -331,6 +409,64 @@ function MobileNav({
         </SelectContent>
       </Select>
     </div>
+  );
+}
+
+function PasscodeGate({
+  authStatus,
+  passcode,
+  authError,
+  setPasscode,
+  onSubmit,
+}: {
+  authStatus: 'checking' | 'authenticated' | 'locked';
+  passcode: string;
+  authError: string;
+  setPasscode: (value: string) => void;
+  onSubmit: (event: SubmitEventLike) => void;
+}) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background px-4 text-foreground">
+      <section className="w-full max-w-sm rounded-lg border border-border bg-card p-6 shadow-sm">
+        <div className="flex items-center gap-3">
+          <Image
+            src="/dv-logo.png"
+            alt="DV"
+            width={46}
+            height={46}
+            className="rounded-md border border-border bg-white object-contain p-1"
+          />
+          <div>
+            <h1 className="text-lg font-semibold">WhatsApp Reachout</h1>
+            <p className="text-sm text-muted-foreground">Protected access</p>
+          </div>
+        </div>
+
+        <form className="mt-6 space-y-4" onSubmit={onSubmit}>
+          <div>
+            <label className="text-sm font-medium" htmlFor="passcode">
+              Passcode
+            </label>
+            <Input
+              id="passcode"
+              inputMode="numeric"
+              type="password"
+              value={passcode}
+              onChange={(event) => setPasscode(event.target.value)}
+              placeholder="Enter passcode"
+              className="mt-2"
+            />
+          </div>
+          {authError && (
+            <p className="text-sm font-medium text-destructive">{authError}</p>
+          )}
+          <Button className="w-full" disabled={authStatus === 'checking'}>
+            <ShieldCheck className="size-4" />
+            {authStatus === 'checking' ? 'Checking access' : 'Unlock'}
+          </Button>
+        </form>
+      </section>
+    </main>
   );
 }
 
