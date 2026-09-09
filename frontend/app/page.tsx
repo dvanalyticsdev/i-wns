@@ -1,37 +1,40 @@
 'use client';
 
 import Image from 'next/image';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Archive,
-  Bell,
+  BarChart3,
   Check,
-  ChevronRight,
   ClipboardList,
-  Database,
-  Download,
-  Filter,
+  Eye,
+  FileSpreadsheet,
   LayoutDashboard,
-  MessageCircle,
-  PhoneCall,
+  Lock,
+  Paperclip,
   Plus,
   RefreshCw,
-  Reply,
-  Search,
   Send,
   Settings,
   ShieldCheck,
-  Sparkles,
   Upload,
   Users,
-  Wand2,
   type LucideIcon,
 } from 'lucide-react';
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Progress } from '@/components/ui/progress';
 import {
   Select,
   SelectContent,
@@ -48,13 +51,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 type ViewId =
   | 'dashboard'
-  | 'batches'
-  | 'archive'
   | 'templates'
+  | 'reachout'
+  | 'reporting'
   | 'sync'
   | 'settings';
 
@@ -80,8 +82,27 @@ type ArchiveResponse = {
   archiveRule?: string;
 };
 
-type SubmitEventLike = {
-  preventDefault: () => void;
+type TemplateRecord = {
+  id: string;
+  name: string;
+  category: string;
+  body: string;
+  mediaName: string;
+  status: 'Draft' | 'Ready';
+};
+
+type BatchRecord = {
+  id: string;
+  name: string;
+  templateId: string;
+  leadIds: string[];
+  sent: number;
+  read: number;
+  clicks: number;
+  replies: number;
+  converted: number;
+  createdAt: string;
+  status: 'Draft' | 'Sent';
 };
 
 const emptyArchive: ArchiveResponse = {
@@ -90,15 +111,11 @@ const emptyArchive: ArchiveResponse = {
   leads: [],
 };
 
-const navItems: Array<{
-  id: ViewId;
-  label: string;
-  icon: LucideIcon;
-}> = [
+const navItems: Array<{ id: ViewId; label: string; icon: LucideIcon }> = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'batches', label: 'Campaign Batches', icon: Send },
-  { id: 'archive', label: 'Archived Leads', icon: Archive },
   { id: 'templates', label: 'Templates', icon: ClipboardList },
+  { id: 'reachout', label: 'Reach Out', icon: Send },
+  { id: 'reporting', label: 'Reporting', icon: BarChart3 },
   { id: 'sync', label: 'CRM Sync', icon: RefreshCw },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
@@ -110,20 +127,22 @@ export default function Home() {
   const [passcode, setPasscode] = useState('');
   const [authError, setAuthError] = useState('');
   const [activeView, setActiveView] = useState<ViewId>('dashboard');
-  const [leadFilter, setLeadFilter] = useState('all');
   const [archive, setArchive] = useState<ArchiveResponse>({
     ...emptyArchive,
     status: 'loading',
   });
-  const [notice, setNotice] = useState(
-    'Loading Main Admission Calling archived leads from i-crm.',
-  );
+  const [notice, setNotice] = useState('Loading CRM archive.');
+  const [templates, setTemplates] = useState<TemplateRecord[]>([]);
+  const [batches, setBatches] = useState<BatchRecord[]>([]);
+  const [selectedReportId, setSelectedReportId] = useState('');
 
   useEffect(() => {
     let cancelled = false;
     async function checkSession() {
       try {
-        const response = await fetch('/api/auth/session', { cache: 'no-store' });
+        const response = await fetch('/api/auth/session', {
+          cache: 'no-store',
+        });
         const data = (await response.json()) as { authenticated?: boolean };
         if (!cancelled) {
           setAuthStatus(data.authenticated ? 'authenticated' : 'locked');
@@ -141,9 +160,8 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (authStatus !== 'authenticated') {
-      return;
-    }
+    if (authStatus !== 'authenticated') return;
+
     let cancelled = false;
     async function loadArchive() {
       setArchive((current) => ({ ...current, status: 'loading' }));
@@ -152,9 +170,7 @@ export default function Home() {
           cache: 'no-store',
         });
         const data = (await response.json()) as ArchiveResponse;
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
         if (response.status === 401) {
           setAuthStatus('locked');
           setNotice('Passcode required.');
@@ -163,7 +179,7 @@ export default function Home() {
         setArchive(data);
         setNotice(
           response.ok
-            ? `Connected to i-crm. ${data.archiveCount.toLocaleString()} Main Admission Calling archived leads found.`
+            ? `${data.archiveCount.toLocaleString()} archived leads loaded from CRM.`
             : data.message || 'CRM connection is not configured yet.',
         );
       } catch {
@@ -183,7 +199,7 @@ export default function Home() {
     };
   }, [authStatus]);
 
-  async function handleLogin(event: SubmitEventLike) {
+  async function handleLogin(event: { preventDefault: () => void }) {
     event.preventDefault();
     setAuthError('');
     const response = await fetch('/api/auth/login', {
@@ -197,7 +213,7 @@ export default function Home() {
     }
     setPasscode('');
     setAuthStatus('authenticated');
-    setNotice('Passcode accepted. Loading i-crm archive.');
+    setNotice('Passcode accepted.');
   }
 
   async function handleLogout() {
@@ -207,36 +223,20 @@ export default function Home() {
     setNotice('Passcode required.');
   }
 
-  const visibleLeads = useMemo(() => {
-    if (leadFilter === 'high-score') {
-      return archive.leads.filter((lead) => lead.score >= 70);
-    }
-    if (leadFilter === 'needs-phone') {
-      return archive.leads.filter((lead) => lead.phone === '-');
-    }
-    return archive.leads;
-  }, [archive.leads, leadFilter]);
-
-  const pageTitle = {
-    dashboard: 'WhatsApp outreach system',
-    batches: 'Campaign batches',
-    archive: 'Main Admission archive',
-    templates: 'WhatsApp templates',
-    sync: 'CRM sync',
-    settings: 'Settings',
-  }[activeView];
-
   if (authStatus !== 'authenticated') {
     return (
       <PasscodeGate
         authStatus={authStatus}
-        passcode={passcode}
         authError={authError}
+        passcode={passcode}
         setPasscode={setPasscode}
         onSubmit={handleLogin}
       />
     );
   }
+
+  const pageTitle =
+    navItems.find((item) => item.id === activeView)?.label || 'Dashboard';
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -275,77 +275,23 @@ export default function Home() {
               </button>
             ))}
           </nav>
-
-          <div className="mt-8 rounded-lg border border-border bg-card p-4">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <Sparkles className="size-4 text-accent-foreground" />
-              Next best action
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Start by creating campaign storage, then connect Meta templates
-              and WhatsApp webhook events.
-            </p>
-            <Button
-              className="mt-4 w-full"
-              size="sm"
-              onClick={() => {
-                setActiveView('batches');
-                setNotice('Campaign setup opened.');
-              }}
-            >
-              <PhoneCall className="size-4" />
-              Open setup
-            </Button>
-          </div>
         </aside>
 
         <section className="min-w-0 flex-1">
-          <header className="sticky top-0 z-10 border-b border-border bg-background/92 px-4 py-4 backdrop-blur md:px-6">
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-              <div>
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <MessageCircle className="size-4 text-[#1fa463]" />
+          <header className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 py-4 backdrop-blur md:px-6">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="truncate text-sm text-muted-foreground">
                   {notice}
-                </div>
-                <h1 className="mt-1 text-2xl font-semibold tracking-normal md:text-3xl">
+                </p>
+                <h1 className="mt-1 text-2xl font-semibold tracking-normal">
                   {pageTitle}
                 </h1>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setActiveView('sync');
-                    setNotice('CRM import panel opened.');
-                  }}
-                >
-                  <Upload className="size-4" />
-                  Import CRM leads
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setActiveView('templates');
-                    setNotice('Template editor opened.');
-                  }}
-                >
-                  <Wand2 className="size-4" />
-                  Draft template
-                </Button>
-                <Button
-                  onClick={() => {
-                    setActiveView('batches');
-                    setNotice('Create the first real campaign batch.');
-                  }}
-                >
-                  <Plus className="size-4" />
-                  New batch
-                </Button>
-                <Button variant="outline" onClick={handleLogout}>
-                  <ShieldCheck className="size-4" />
-                  Lock
-                </Button>
-              </div>
+              <Button variant="outline" onClick={handleLogout}>
+                <Lock className="size-4" />
+                Lock
+              </Button>
             </div>
           </header>
 
@@ -354,25 +300,36 @@ export default function Home() {
           {activeView === 'dashboard' && (
             <DashboardView
               archive={archive}
-              visibleLeads={visibleLeads}
-              leadFilter={leadFilter}
-              setLeadFilter={setLeadFilter}
-              setActiveView={setActiveView}
-              setNotice={setNotice}
-            />
-          )}
-          {activeView === 'batches' && <BatchesView setNotice={setNotice} />}
-          {activeView === 'archive' && (
-            <ArchiveView
-              archive={archive}
-              visibleLeads={visibleLeads}
-              leadFilter={leadFilter}
-              setLeadFilter={setLeadFilter}
-              setNotice={setNotice}
+              batches={batches}
+              templates={templates}
             />
           )}
           {activeView === 'templates' && (
-            <TemplatesView setNotice={setNotice} />
+            <TemplatesView
+              templates={templates}
+              setTemplates={setTemplates}
+              setNotice={setNotice}
+            />
+          )}
+          {activeView === 'reachout' && (
+            <ReachOutView
+              archive={archive}
+              templates={templates}
+              setBatches={setBatches}
+              setActiveView={setActiveView}
+              setSelectedReportId={setSelectedReportId}
+              setNotice={setNotice}
+            />
+          )}
+          {activeView === 'reporting' && (
+            <ReportingView
+              batches={batches}
+              leads={archive.leads}
+              templates={templates}
+              selectedReportId={selectedReportId}
+              setSelectedReportId={setSelectedReportId}
+              setNotice={setNotice}
+            />
           )}
           {activeView === 'sync' && (
             <SyncView archive={archive} setNotice={setNotice} />
@@ -380,6 +337,60 @@ export default function Home() {
           {activeView === 'settings' && <SettingsView setNotice={setNotice} />}
         </section>
       </div>
+    </main>
+  );
+}
+
+function PasscodeGate({
+  authStatus,
+  passcode,
+  authError,
+  setPasscode,
+  onSubmit,
+}: {
+  authStatus: 'checking' | 'authenticated' | 'locked';
+  passcode: string;
+  authError: string;
+  setPasscode: (value: string) => void;
+  onSubmit: (event: { preventDefault: () => void }) => void;
+}) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background px-4 text-foreground">
+      <section className="w-full max-w-sm rounded-lg border border-border bg-card p-6 shadow-sm">
+        <div className="flex items-center gap-3">
+          <Image
+            src="/dv-logo.png"
+            alt="DV"
+            width={46}
+            height={46}
+            className="rounded-md border border-border bg-white object-contain p-1"
+          />
+          <div>
+            <h1 className="text-lg font-semibold">WhatsApp Reachout</h1>
+            <p className="text-sm text-muted-foreground">Protected access</p>
+          </div>
+        </div>
+        <form className="mt-6 space-y-4" onSubmit={onSubmit}>
+          <label className="block text-sm font-medium" htmlFor="passcode">
+            Passcode
+          </label>
+          <Input
+            id="passcode"
+            inputMode="numeric"
+            type="password"
+            value={passcode}
+            onChange={(event) => setPasscode(event.target.value)}
+            placeholder="Enter passcode"
+          />
+          {authError && (
+            <p className="text-sm font-medium text-destructive">{authError}</p>
+          )}
+          <Button className="w-full" disabled={authStatus === 'checking'}>
+            <ShieldCheck className="size-4" />
+            {authStatus === 'checking' ? 'Checking access' : 'Unlock'}
+          </Button>
+        </form>
+      </section>
     </main>
   );
 }
@@ -412,380 +423,586 @@ function MobileNav({
   );
 }
 
-function PasscodeGate({
-  authStatus,
-  passcode,
-  authError,
-  setPasscode,
-  onSubmit,
-}: {
-  authStatus: 'checking' | 'authenticated' | 'locked';
-  passcode: string;
-  authError: string;
-  setPasscode: (value: string) => void;
-  onSubmit: (event: SubmitEventLike) => void;
-}) {
-  return (
-    <main className="flex min-h-screen items-center justify-center bg-background px-4 text-foreground">
-      <section className="w-full max-w-sm rounded-lg border border-border bg-card p-6 shadow-sm">
-        <div className="flex items-center gap-3">
-          <Image
-            src="/dv-logo.png"
-            alt="DV"
-            width={46}
-            height={46}
-            className="rounded-md border border-border bg-white object-contain p-1"
-          />
-          <div>
-            <h1 className="text-lg font-semibold">WhatsApp Reachout</h1>
-            <p className="text-sm text-muted-foreground">Protected access</p>
-          </div>
-        </div>
-
-        <form className="mt-6 space-y-4" onSubmit={onSubmit}>
-          <div>
-            <label className="text-sm font-medium" htmlFor="passcode">
-              Passcode
-            </label>
-            <Input
-              id="passcode"
-              inputMode="numeric"
-              type="password"
-              value={passcode}
-              onChange={(event) => setPasscode(event.target.value)}
-              placeholder="Enter passcode"
-              className="mt-2"
-            />
-          </div>
-          {authError && (
-            <p className="text-sm font-medium text-destructive">{authError}</p>
-          )}
-          <Button className="w-full" disabled={authStatus === 'checking'}>
-            <ShieldCheck className="size-4" />
-            {authStatus === 'checking' ? 'Checking access' : 'Unlock'}
-          </Button>
-        </form>
-      </section>
-    </main>
-  );
-}
-
 function DashboardView({
   archive,
-  visibleLeads,
-  leadFilter,
-  setLeadFilter,
-  setActiveView,
-  setNotice,
+  batches,
+  templates,
 }: {
   archive: ArchiveResponse;
-  visibleLeads: ArchiveLead[];
-  leadFilter: string;
-  setLeadFilter: (filter: string) => void;
-  setActiveView: (view: ViewId) => void;
-  setNotice: (notice: string) => void;
+  batches: BatchRecord[];
+  templates: TemplateRecord[];
 }) {
+  const reachedOut = batches.reduce((sum, batch) => sum + batch.sent, 0);
+  const converted = batches.reduce((sum, batch) => sum + batch.converted, 0);
+  const [templateFilter, setTemplateFilter] = useState('all');
+  const trend = buildTrendData(batches, templateFilter);
+
   return (
-    <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-[minmax(0,1fr)_390px]">
-      <div className="space-y-4">
-        <section className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
-          <Metric
-            icon={Archive}
-            label="Main Admission archive"
-            value={archive.archiveCount.toLocaleString()}
-            detail={connectionText(archive)}
-          />
-          <Metric
-            icon={Users}
-            label="Loaded in table"
-            value={archive.leads.length.toLocaleString()}
-            detail="latest archived records"
-          />
-          <Metric
-            icon={Send}
-            label="Campaign batches"
-            value="0"
-            detail="backend table not created yet"
-          />
-          <Metric
-            icon={Reply}
-            label="Tracked replies"
-            value="0"
-            detail="WhatsApp webhook not connected yet"
-          />
-        </section>
-
-        <section className="rounded-lg border border-border bg-card p-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">
-                Current data source
-              </p>
-              <h2 className="text-xl font-semibold tracking-normal">
-                i-crm Main Admission Calling archive
-              </h2>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge className="bg-[#e8f7ef] text-[#147f4d] hover:bg-[#e8f7ef]">
-                {archive.status}
-              </Badge>
-              {archive.collection && (
-                <Badge variant="outline">{archive.collection}</Badge>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-5 grid gap-5 2xl:grid-cols-[1fr_320px]">
-            <div className="rounded-lg border border-dashed border-border bg-background p-6">
-              <div className="flex min-h-64 flex-col items-center justify-center text-center">
-                <Database className="size-10 text-primary" />
-                <h3 className="mt-3 text-lg font-semibold">
-                  No outreach batch data yet
-                </h3>
-                <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                  Leads are coming from i-crm. Sending, read receipts, clicks,
-                  replies, and webinar conversions will appear after the i-wns
-                  campaign tables and WhatsApp webhooks are added.
-                </p>
-                <Button
-                  className="mt-4"
-                  onClick={() => setActiveView('batches')}
-                >
-                  <Plus className="size-4" />
-                  Set up campaign batches
-                </Button>
-              </div>
-            </div>
-            <div className="space-y-4">
-              <FunnelRow
-                label="Main Admission archived leads"
-                value={archive.archiveCount}
-                max={Math.max(archive.archiveCount, 1)}
-              />
-              <FunnelRow
-                label="Loaded preview rows"
-                value={archive.leads.length}
-                max={Math.max(archive.archiveCount, 1)}
-              />
-              <FunnelRow label="Messages sent" value={0} max={1} />
-              <FunnelRow label="Replies tracked" value={0} max={1} />
-              <div className="rounded-lg bg-muted p-3">
-                <p className="text-sm font-medium">Conversion rate</p>
-                <p className="text-2xl font-semibold">0%</p>
-                <p className="text-sm text-muted-foreground">
-                  waiting for WhatsApp and webinar tracking
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <LeadsPanel
-          visibleLeads={visibleLeads}
-          leadFilter={leadFilter}
-          setLeadFilter={setLeadFilter}
-          setNotice={setNotice}
+    <div className="space-y-4 px-4 py-5 md:px-6">
+      <section className="grid gap-3 md:grid-cols-3">
+        <Metric
+          icon={Archive}
+          label="Archived leads"
+          value={archive.archiveCount.toLocaleString()}
+          detail="Main Admission Calling"
         />
-      </div>
+        <Metric
+          icon={Send}
+          label="Reached out"
+          value={reachedOut.toLocaleString()}
+          detail="sent through i-wns"
+        />
+        <Metric
+          icon={Check}
+          label="Converted"
+          value={converted.toLocaleString()}
+          detail="webinar conversions"
+        />
+      </section>
 
-      <aside className="space-y-4">
-        <TemplateComposer setActiveView={setActiveView} setNotice={setNotice} />
-        <CrmQueue archive={archive} />
-        <StageBreakdown />
-        <ActionAlerts />
-      </aside>
-    </div>
-  );
-}
-
-function BatchesView({ setNotice }: { setNotice: (notice: string) => void }) {
-  return (
-    <div className="px-4 py-5 md:px-6">
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <section className="rounded-lg border border-border bg-card">
-          <div className="flex flex-col gap-3 border-b border-border p-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <h2 className="text-lg font-semibold">All message batches</h2>
-              <p className="text-sm text-muted-foreground">
-                Batch records will be created here after the backend campaign
-                storage is added.
-              </p>
-            </div>
-            <Button
-              onClick={() =>
-                setNotice('Campaign batch backend is not connected yet.')
-              }
-            >
-              <Plus className="size-4" />
-              Create batch
-            </Button>
-          </div>
-          <EmptyState
-            icon={Send}
-            title="No campaign batches yet"
-            text="The frontend is ready for this workflow. Next we need database tables for batches, recipients, events, and conversions."
-          />
-        </section>
-        <section className="rounded-lg border border-border bg-card p-4">
-          <h2 className="text-lg font-semibold">Batch controls</h2>
-          <div className="mt-4 space-y-3">
-            <ControlRow label="Auto-skip leads already messaged" checked />
-            <ControlRow label="Pause if quality rating drops" checked />
-            <ControlRow label="Send reminder to clickers only" />
-            <Button
-              className="w-full"
-              onClick={() =>
-                setNotice(
-                  'Reminder creation needs campaign event storage first.',
-                )
-              }
-            >
-              <Send className="size-4" />
-              Create reminder batch
-            </Button>
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
-function ArchiveView({
-  archive,
-  visibleLeads,
-  leadFilter,
-  setLeadFilter,
-  setNotice,
-}: {
-  archive: ArchiveResponse;
-  visibleLeads: ArchiveLead[];
-  leadFilter: string;
-  setLeadFilter: (filter: string) => void;
-  setNotice: (notice: string) => void;
-}) {
-  return (
-    <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <section className="rounded-lg border border-border bg-card">
-        <div className="flex flex-col gap-3 border-b border-border p-4 md:flex-row md:items-center md:justify-between">
+      <section className="rounded-lg border border-border bg-card p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="text-lg font-semibold">
-              Main Admission Calling archived leads
-            </h2>
+            <h2 className="text-lg font-semibold">Overall performance</h2>
             <p className="text-sm text-muted-foreground">
-              Read-only data from i-crm using the archived lead rule.
+              Reads, clicks, replies, and conversions by template.
             </p>
           </div>
-          <div className="flex gap-2">
-            <Input className="w-56" placeholder="Search archive" />
-            <Button variant="outline">
-              <Filter className="size-4" />
-              Filter
-            </Button>
-          </div>
+          <Select
+            value={templateFilter}
+            onValueChange={(value) => value && setTemplateFilter(value)}
+          >
+            <SelectTrigger className="w-full md:w-64">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All templates</SelectItem>
+              {templates.map((template) => (
+                <SelectItem key={template.id} value={template.id}>
+                  {template.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-        {archive.status === 'loading' ? (
-          <EmptyState
-            icon={RefreshCw}
-            title="Loading leads"
-            text="Reading Main Admission Calling archived leads from i-crm."
-          />
-        ) : visibleLeads.length ? (
-          <LeadTable leadsToShow={visibleLeads} />
+        {trend.length ? (
+          <div className="mt-4 h-80 min-w-0">
+            <ResponsiveContainer width="100%" height="100%" minWidth={260}>
+              <AreaChart data={trend} margin={{ left: 0, right: 12 }}>
+                <CartesianGrid stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} />
+                <YAxis tickLine={false} axisLine={false} width={38} />
+                <Tooltip />
+                <Legend />
+                <Area
+                  type="monotone"
+                  dataKey="read"
+                  stroke="#1fa463"
+                  fill="#1fa46333"
+                  strokeWidth={2}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="clicks"
+                  stroke="#1769aa"
+                  fill="#1769aa22"
+                  strokeWidth={2}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="replies"
+                  stroke="#c06f24"
+                  fill="#c06f2422"
+                  strokeWidth={2}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="converted"
+                  stroke="#6f4bb8"
+                  fill="#6f4bb822"
+                  strokeWidth={2}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         ) : (
           <EmptyState
-            icon={Archive}
-            title="No archived leads found"
-            text={archive.message || 'The archive query returned no rows.'}
+            icon={BarChart3}
+            title="No performance data yet"
+            text="After you send a batch, this trendline will show reads, clicks, replies, and conversions."
           />
         )}
       </section>
+    </div>
+  );
+}
+
+function TemplatesView({
+  templates,
+  setTemplates,
+  setNotice,
+}: {
+  templates: TemplateRecord[];
+  setTemplates: (
+    updater: (templates: TemplateRecord[]) => TemplateRecord[],
+  ) => void;
+  setNotice: (notice: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [category, setCategory] = useState('Marketing');
+  const [body, setBody] = useState('');
+  const [mediaName, setMediaName] = useState('');
+
+  function addTemplate() {
+    if (!name.trim() || !body.trim()) {
+      setNotice('Template name and message are required.');
+      return;
+    }
+    const template: TemplateRecord = {
+      id: crypto.randomUUID(),
+      name: name.trim(),
+      category,
+      body: body.trim(),
+      mediaName,
+      status: 'Draft',
+    };
+    setTemplates((current) => [template, ...current]);
+    setName('');
+    setBody('');
+    setMediaName('');
+    setNotice('Template added for this browser session.');
+  }
+
+  return (
+    <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-[minmax(0,1fr)_430px]">
+      <section className="rounded-lg border border-border bg-card">
+        <div className="border-b border-border p-4">
+          <h2 className="text-lg font-semibold">Templates</h2>
+          <p className="text-sm text-muted-foreground">
+            Manage message text and media before using a template in Reach Out.
+          </p>
+        </div>
+        {templates.length ? (
+          <div className="grid gap-3 p-4">
+            {templates.map((template) => (
+              <article
+                key={template.id}
+                className="rounded-lg border border-border bg-background p-4"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-semibold">{template.name}</h3>
+                    <p className="text-sm text-muted-foreground">
+                      {template.category}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    {template.mediaName && (
+                      <Badge variant="outline">
+                        <Paperclip className="size-3" />
+                        media
+                      </Badge>
+                    )}
+                    <Badge>{template.status}</Badge>
+                  </div>
+                </div>
+                <p className="mt-3 text-sm text-muted-foreground">
+                  {template.body}
+                </p>
+                {template.mediaName && (
+                  <p className="mt-2 text-sm font-medium">
+                    {template.mediaName}
+                  </p>
+                )}
+              </article>
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            icon={ClipboardList}
+            title="No templates yet"
+            text="Create your first WhatsApp template here. Backend persistence and Meta approval sync can be added next."
+          />
+        )}
+      </section>
+
       <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-lg font-semibold">Archive actions</h2>
-        <div className="mt-4 grid gap-3">
-          <SegmentButton
-            title="Main Admission archived leads"
-            count={archive.archiveCount.toLocaleString()}
-            onClick={() => {
-              setLeadFilter('all');
-              setNotice('Selected Main Admission Calling archived leads.');
-            }}
-          />
-          <SegmentButton
-            title="High score preview"
-            count={archive.leads
-              .filter((lead) => lead.score >= 70)
-              .length.toLocaleString()}
-            onClick={() => {
-              setLeadFilter('high-score');
-              setNotice('Selected higher-scoring archived leads.');
-            }}
-          />
-          <SegmentButton
-            title="Needs phone cleanup"
-            count={archive.leads
-              .filter((lead) => lead.phone === '-')
-              .length.toLocaleString()}
-            onClick={() => {
-              setLeadFilter('needs-phone');
-              setNotice('Selected archived leads missing phone numbers.');
-            }}
+        <h2 className="text-lg font-semibold">Add template</h2>
+        <div className="mt-4 space-y-3">
+          <Input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Template name"
           />
           <Select
-            value={leadFilter}
-            onValueChange={(value) => value && setLeadFilter(value)}
+            value={category}
+            onValueChange={(value) => value && setCategory(value)}
           >
             <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Main Admission archived leads</SelectItem>
-              <SelectItem value="high-score">High score preview</SelectItem>
-              <SelectItem value="needs-phone">Needs phone cleanup</SelectItem>
+              <SelectItem value="Marketing">Marketing</SelectItem>
+              <SelectItem value="Utility">Utility</SelectItem>
+              <SelectItem value="Authentication">Authentication</SelectItem>
             </SelectContent>
           </Select>
+          <textarea
+            className="min-h-36 w-full rounded-lg border border-input bg-background p-3 text-sm outline-none focus:ring-3 focus:ring-ring/25"
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+            placeholder="Message body"
+          />
+          <label className="flex cursor-pointer items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm">
+            <span className="truncate">{mediaName || 'Attach media file'}</span>
+            <Upload className="size-4 text-muted-foreground" />
+            <input
+              className="sr-only"
+              type="file"
+              onChange={(event) =>
+                setMediaName(event.target.files?.[0]?.name || '')
+              }
+            />
+          </label>
+          <Button className="w-full" onClick={addTemplate}>
+            <Plus className="size-4" />
+            Add template
+          </Button>
         </div>
       </section>
     </div>
   );
 }
 
-function TemplatesView({ setNotice }: { setNotice: (notice: string) => void }) {
+function ReachOutView({
+  archive,
+  templates,
+  setBatches,
+  setActiveView,
+  setSelectedReportId,
+  setNotice,
+}: {
+  archive: ArchiveResponse;
+  templates: TemplateRecord[];
+  setBatches: (updater: (batches: BatchRecord[]) => BatchRecord[]) => void;
+  setActiveView: (view: ViewId) => void;
+  setSelectedReportId: (id: string) => void;
+  setNotice: (notice: string) => void;
+}) {
+  const [batchName, setBatchName] = useState('');
+  const [templateId, setTemplateId] = useState('');
+  const [city, setCity] = useState('all');
+  const [course, setCourse] = useState('all');
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
+
+  const cities = uniqueValues(archive.leads.map((lead) => lead.city));
+  const courses = uniqueValues(archive.leads.map((lead) => lead.company));
+  const filteredLeads = archive.leads.filter((lead) => {
+    return (
+      (city === 'all' || lead.city === city) &&
+      (course === 'all' || lead.company === course)
+    );
+  });
+
+  function toggleLead(id: string) {
+    setSelectedLeadIds((current) =>
+      current.includes(id)
+        ? current.filter((leadId) => leadId !== id)
+        : [...current, id],
+    );
+  }
+
+  function sendBatch() {
+    if (!batchName.trim() || !templateId || !selectedLeadIds.length) {
+      setNotice('Batch name, template, and at least one lead are required.');
+      return;
+    }
+    const batch: BatchRecord = {
+      id: crypto.randomUUID(),
+      name: batchName.trim(),
+      templateId,
+      leadIds: selectedLeadIds,
+      sent: selectedLeadIds.length,
+      read: 0,
+      clicks: 0,
+      replies: 0,
+      converted: 0,
+      createdAt: new Date().toLocaleString('en-IN'),
+      status: 'Sent',
+    };
+    setBatches((current) => [batch, ...current]);
+    setSelectedReportId(batch.id);
+    setBatchName('');
+    setSelectedLeadIds([]);
+    setActiveView('reporting');
+    setNotice(
+      'Batch created in this session. Meta sending will be wired next.',
+    );
+  }
+
   return (
-    <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-[minmax(0,1fr)_430px]">
+    <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-[minmax(0,1fr)_360px]">
       <section className="rounded-lg border border-border bg-card">
-        <div className="flex items-center justify-between border-b border-border p-4">
-          <h2 className="text-lg font-semibold">Template library</h2>
+        <div className="border-b border-border p-4">
+          <h2 className="text-lg font-semibold">Select leads</h2>
+          <p className="text-sm text-muted-foreground">
+            Filter Main Admission archive leads, choose a template, name the
+            batch, then send.
+          </p>
+        </div>
+        <div className="grid gap-3 border-b border-border p-4 md:grid-cols-3">
+          <Select
+            value={city}
+            onValueChange={(value) => value && setCity(value)}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Location" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All locations</SelectItem>
+              {cities.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {value}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={course}
+            onValueChange={(value) => value && setCourse(value)}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Course" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All courses</SelectItem>
+              {courses.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {value}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
+            variant="outline"
             onClick={() =>
-              setNotice(
-                'Template storage and Meta approval sync are not connected yet.',
-              )
+              setSelectedLeadIds(filteredLeads.map((lead) => lead.id))
             }
           >
-            <Plus className="size-4" />
-            New template
+            <Users className="size-4" />
+            Select visible
           </Button>
         </div>
-        <EmptyState
-          icon={ClipboardList}
-          title="No templates connected"
-          text="This page is ready for approved Meta template records. Next backend step: store template names, language, category, body, buttons, and approval status."
-        />
+        {filteredLeads.length ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-12"></TableHead>
+                <TableHead>Lead</TableHead>
+                <TableHead>Location</TableHead>
+                <TableHead>Course</TableHead>
+                <TableHead>Score</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredLeads.map((lead) => (
+                <TableRow key={lead.id}>
+                  <TableCell>
+                    <input
+                      aria-label={`Select ${lead.name}`}
+                      checked={selectedLeadIds.includes(lead.id)}
+                      onChange={() => toggleLead(lead.id)}
+                      type="checkbox"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <div className="font-medium">{lead.name}</div>
+                    <div className="text-sm text-muted-foreground">
+                      {lead.phone}
+                    </div>
+                  </TableCell>
+                  <TableCell>{lead.city}</TableCell>
+                  <TableCell>{lead.company}</TableCell>
+                  <TableCell>{lead.score}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <EmptyState
+            icon={Archive}
+            title="No leads found"
+            text="Change filters or check CRM sync."
+          />
+        )}
       </section>
+
       <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-lg font-semibold">Editor preview</h2>
-        <div className="mt-4 rounded-lg border border-dashed border-border bg-background p-6 text-sm text-muted-foreground">
-          Select or create a real WhatsApp template after Meta Cloud API
-          credentials are added.
+        <h2 className="text-lg font-semibold">Send batch</h2>
+        <div className="mt-4 space-y-3">
+          <Input
+            value={batchName}
+            onChange={(event) => setBatchName(event.target.value)}
+            placeholder="Batch name"
+          />
+          <Select
+            value={templateId}
+            onValueChange={(value) => value && setTemplateId(value)}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Choose template" />
+            </SelectTrigger>
+            <SelectContent>
+              {templates.length ? (
+                templates.map((template) => (
+                  <SelectItem key={template.id} value={template.id}>
+                    {template.name}
+                  </SelectItem>
+                ))
+              ) : (
+                <SelectItem value="none">No templates added</SelectItem>
+              )}
+            </SelectContent>
+          </Select>
+          <div className="rounded-lg bg-muted p-3">
+            <p className="text-sm font-medium">Selected leads</p>
+            <p className="text-3xl font-semibold">{selectedLeadIds.length}</p>
+          </div>
+          <Button
+            className="w-full"
+            onClick={sendBatch}
+            disabled={!templates.length}
+          >
+            <Send className="size-4" />
+            Send message
+          </Button>
         </div>
-        <Button
-          className="mt-4 w-full"
-          onClick={() => setNotice('Meta template approval sync pending.')}
-        >
-          <ShieldCheck className="size-4" />
-          Send for approval
-        </Button>
       </section>
+    </div>
+  );
+}
+
+function ReportingView({
+  batches,
+  leads,
+  templates,
+  selectedReportId,
+  setSelectedReportId,
+  setNotice,
+}: {
+  batches: BatchRecord[];
+  leads: ArchiveLead[];
+  templates: TemplateRecord[];
+  selectedReportId: string;
+  setSelectedReportId: (id: string) => void;
+  setNotice: (notice: string) => void;
+}) {
+  const selectedBatch =
+    batches.find((batch) => batch.id === selectedReportId) || batches[0];
+  const goodLeads = selectedBatch
+    ? leads.filter(
+        (lead) => selectedBatch.leadIds.includes(lead.id) && lead.score >= 70,
+      )
+    : [];
+
+  return (
+    <div className="space-y-4 px-4 py-5 md:px-6">
+      <section className="rounded-lg border border-border bg-card">
+        <div className="border-b border-border p-4">
+          <h2 className="text-lg font-semibold">Batch reports</h2>
+          <p className="text-sm text-muted-foreground">
+            Open a batch report to review performance and export good leads.
+          </p>
+        </div>
+        {batches.length ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Batch</TableHead>
+                <TableHead>Template</TableHead>
+                <TableHead>Sent</TableHead>
+                <TableHead>Read</TableHead>
+                <TableHead>Clicks</TableHead>
+                <TableHead>Replies</TableHead>
+                <TableHead></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {batches.map((batch) => (
+                <TableRow key={batch.id}>
+                  <TableCell>
+                    <div className="font-medium">{batch.name}</div>
+                    <div className="text-sm text-muted-foreground">
+                      {batch.createdAt}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    {templateName(templates, batch.templateId)}
+                  </TableCell>
+                  <TableCell>{batch.sent}</TableCell>
+                  <TableCell>{batch.read}</TableCell>
+                  <TableCell>{batch.clicks}</TableCell>
+                  <TableCell>{batch.replies}</TableCell>
+                  <TableCell>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setSelectedReportId(batch.id);
+                        setNotice(`Opened report for ${batch.name}.`);
+                      }}
+                    >
+                      <Eye className="size-4" />
+                      View report
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <EmptyState
+            icon={BarChart3}
+            title="No reports yet"
+            text="Reports will appear after you send the first batch."
+          />
+        )}
+      </section>
+
+      {selectedBatch && (
+        <section className="rounded-lg border border-border bg-card p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">{selectedBatch.name}</h2>
+              <p className="text-sm text-muted-foreground">
+                In-depth report tab
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => setNotice('Excel export prepared for good leads.')}
+            >
+              <FileSpreadsheet className="size-4" />
+              Export Excel
+            </Button>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-5">
+            <MiniMetric label="Sent" value={selectedBatch.sent} />
+            <MiniMetric label="Read" value={selectedBatch.read} />
+            <MiniMetric label="Clicks" value={selectedBatch.clicks} />
+            <MiniMetric label="Replies" value={selectedBatch.replies} />
+            <MiniMetric label="Converted" value={selectedBatch.converted} />
+          </div>
+          <h3 className="mt-5 font-semibold">Good leads</h3>
+          {goodLeads.length ? (
+            <LeadTable leadsToShow={goodLeads} />
+          ) : (
+            <div className="mt-3 rounded-lg border border-dashed border-border bg-background p-5 text-sm text-muted-foreground">
+              No high-intent leads yet. This will fill from click, reply, and
+              conversion events.
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }
@@ -804,12 +1021,12 @@ function SyncView({
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <Metric
             icon={Users}
-            label="Main Admission archive"
+            label="Archive leads"
             value={archive.archiveCount.toLocaleString()}
             detail={connectionText(archive)}
           />
           <Metric
-            icon={Database}
+            icon={Archive}
             label="Collection"
             value={archive.collection || '-'}
             detail="read-only access"
@@ -832,19 +1049,12 @@ function SyncView({
       <section className="rounded-lg border border-border bg-card p-4">
         <h2 className="text-lg font-semibold">Sync controls</h2>
         <div className="mt-4 space-y-3">
-          <ControlRow
-            label="Pull Main Admission Calling archive from i-crm"
-            checked
-          />
+          <ControlRow label="Pull Main Admission archive from i-crm" checked />
           <ControlRow label="Keep i-crm read-only from i-wns" checked />
-          <ControlRow label="Store WhatsApp batch tags in i-wns only" checked />
+          <ControlRow label="Store WhatsApp batches in i-wns only" checked />
           <Button
             className="w-full"
-            onClick={() =>
-              setNotice(
-                'Refreshed Main Admission Calling archived leads from i-crm.',
-              )
-            }
+            onClick={() => setNotice('CRM archive refreshed.')}
           >
             <RefreshCw className="size-4" />
             Refresh view
@@ -874,17 +1084,16 @@ function SettingsView({ setNotice }: { setNotice: (notice: string) => void }) {
         </div>
       </section>
       <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-lg font-semibold">Team and exports</h2>
+        <h2 className="text-lg font-semibold">Access and exports</h2>
         <div className="mt-4 space-y-3">
-          <Input placeholder="Owner name" />
           <Input placeholder="Notification email" />
-          <Select defaultValue="csv">
+          <Select defaultValue="xlsx">
             <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="csv">CSV export</SelectItem>
               <SelectItem value="xlsx">Excel export</SelectItem>
+              <SelectItem value="csv">CSV export</SelectItem>
               <SelectItem value="crm">Push to CRM list</SelectItem>
             </SelectContent>
           </Select>
@@ -900,209 +1109,6 @@ function SettingsView({ setNotice }: { setNotice: (notice: string) => void }) {
         </div>
       </section>
     </div>
-  );
-}
-
-function LeadsPanel({
-  visibleLeads,
-  leadFilter,
-  setLeadFilter,
-  setNotice,
-}: {
-  visibleLeads: ArchiveLead[];
-  leadFilter: string;
-  setLeadFilter: (filter: string) => void;
-  setNotice: (notice: string) => void;
-}) {
-  return (
-    <section className="rounded-lg border border-border bg-card">
-      <Tabs defaultValue="leads" className="gap-0">
-        <div className="flex flex-col gap-3 border-b border-border p-4 xl:flex-row xl:items-center xl:justify-between">
-          <TabsList>
-            <TabsTrigger value="leads">Main Admission archive</TabsTrigger>
-            <TabsTrigger value="batches">Batch history</TabsTrigger>
-            <TabsTrigger value="exports">Exports</TabsTrigger>
-          </TabsList>
-          <LeadToolbar
-            leadFilter={leadFilter}
-            setLeadFilter={setLeadFilter}
-            onExport={() =>
-              setNotice(
-                `Prepared ${visibleLeads.length.toLocaleString()} Main Admission Calling archived leads for CSV export.`,
-              )
-            }
-          />
-        </div>
-
-        <TabsContent value="leads" className="m-0">
-          {visibleLeads.length ? (
-            <LeadTable leadsToShow={visibleLeads} />
-          ) : (
-            <EmptyState
-              icon={Archive}
-              title="No rows to show"
-              text="Try another archive filter or check the CRM connection."
-            />
-          )}
-        </TabsContent>
-
-        <TabsContent value="batches" className="m-0">
-          <EmptyState
-            icon={Send}
-            title="No batch history yet"
-            text="Batch history will appear after the campaign backend starts writing send records."
-          />
-        </TabsContent>
-
-        <TabsContent value="exports" className="m-0 p-4">
-          <div className="grid gap-3 md:grid-cols-3">
-            <ExportCard
-              title="Main Admission archive"
-              count={visibleLeads.length.toLocaleString()}
-              detail="Current filtered view"
-              onClick={() => setNotice('Archived lead export prepared.')}
-            />
-            <ExportCard
-              title="Clicked leads"
-              count="0"
-              detail="Waiting for click tracking"
-              onClick={() => setNotice('Click tracking backend is pending.')}
-            />
-            <ExportCard
-              title="Replied leads"
-              count="0"
-              detail="Waiting for WhatsApp webhooks"
-              onClick={() => setNotice('Reply tracking backend is pending.')}
-            />
-          </div>
-        </TabsContent>
-      </Tabs>
-    </section>
-  );
-}
-
-function LeadToolbar({
-  leadFilter,
-  setLeadFilter,
-  onExport,
-}: {
-  leadFilter: string;
-  setLeadFilter: (filter: string) => void;
-  onExport: () => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-2">
-      <div className="relative">
-        <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-        <Input className="w-56 pl-8" placeholder="Search leads" />
-      </div>
-      <Select
-        value={leadFilter}
-        onValueChange={(value) => value && setLeadFilter(value)}
-      >
-        <SelectTrigger className="w-48">
-          <Filter className="size-4" />
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">Main Admission archived leads</SelectItem>
-          <SelectItem value="high-score">High score preview</SelectItem>
-          <SelectItem value="needs-phone">Needs phone cleanup</SelectItem>
-        </SelectContent>
-      </Select>
-      <Button variant="outline" onClick={onExport}>
-        <Download className="size-4" />
-        Export leads
-      </Button>
-    </div>
-  );
-}
-
-function TemplateComposer({
-  setActiveView,
-  setNotice,
-}: {
-  setActiveView: (view: ViewId) => void;
-  setNotice: (notice: string) => void;
-}) {
-  return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Template composer</h2>
-        <Badge variant="outline">Not connected</Badge>
-      </div>
-      <div className="mt-4 rounded-lg border border-dashed border-border bg-background p-5 text-sm text-muted-foreground">
-        No template records are stored in i-wns yet.
-      </div>
-      <Button
-        className="mt-4 w-full"
-        onClick={() => {
-          setActiveView('templates');
-          setNotice('Template setup opened.');
-        }}
-      >
-        <ClipboardList className="size-4" />
-        Open templates
-      </Button>
-    </section>
-  );
-}
-
-function CrmQueue({ archive }: { archive: ArchiveResponse }) {
-  return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <h2 className="text-lg font-semibold">CRM queue</h2>
-      <div className="mt-4 space-y-4">
-        <QueueRow
-          label="Main Admission archive"
-          value={archive.archiveCount.toLocaleString()}
-          icon={Users}
-        />
-        <QueueRow
-          label="Loaded preview rows"
-          value={archive.leads.length.toLocaleString()}
-          icon={Archive}
-        />
-        <QueueRow label="Available campaigns" value="0" icon={Send} />
-      </div>
-      <div className="mt-4 flex items-center justify-between rounded-lg bg-muted p-3">
-        <div>
-          <p className="text-sm font-medium">Read-only CRM access</p>
-          <p className="text-xs text-muted-foreground">
-            i-wns does not write into i-crm
-          </p>
-        </div>
-        <Switch defaultChecked />
-      </div>
-    </section>
-  );
-}
-
-function StageBreakdown() {
-  return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <h2 className="text-lg font-semibold">Stage breakdown</h2>
-      <div className="mt-4 rounded-lg border border-dashed border-border bg-background p-6 text-center text-sm text-muted-foreground">
-        Delivery, read, click, reply, and conversion stages will appear after
-        WhatsApp event storage is added.
-      </div>
-    </section>
-  );
-}
-
-function ActionAlerts() {
-  return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center gap-2">
-        <Bell className="size-4 text-[#c06f24]" />
-        <h2 className="text-lg font-semibold">Action alerts</h2>
-      </div>
-      <div className="mt-3 space-y-3 text-sm">
-        <AlertLine text="Main Admission archived leads are read-only from i-crm" />
-        <AlertLine text="Create i-wns batch storage before sending" />
-        <AlertLine text="Connect Meta webhooks before tracking replies" />
-      </div>
-    </section>
   );
 }
 
@@ -1129,22 +1135,11 @@ function Metric({
   );
 }
 
-function FunnelRow({
-  label,
-  value,
-  max,
-}: {
-  label: string;
-  value: number;
-  max: number;
-}) {
+function MiniMetric({ label, value }: { label: string; value: number }) {
   return (
-    <div>
-      <div className="mb-1 flex items-center justify-between text-sm">
-        <span>{label}</span>
-        <span className="font-medium">{value.toLocaleString()}</span>
-      </div>
-      <Progress value={(value / max) * 100} className="h-2" />
+    <div className="rounded-lg bg-muted p-3">
+      <p className="text-sm text-muted-foreground">{label}</p>
+      <p className="text-2xl font-semibold">{value.toLocaleString()}</p>
     </div>
   );
 }
@@ -1155,10 +1150,10 @@ function LeadTable({ leadsToShow }: { leadsToShow: ArchiveLead[] }) {
       <TableHeader>
         <TableRow>
           <TableHead>Lead</TableHead>
-          <TableHead>Source</TableHead>
+          <TableHead>Location</TableHead>
+          <TableHead>Course</TableHead>
           <TableHead>Last action</TableHead>
           <TableHead>Score</TableHead>
-          <TableHead>Status</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -1166,94 +1161,21 @@ function LeadTable({ leadsToShow }: { leadsToShow: ArchiveLead[] }) {
           <TableRow key={lead.id}>
             <TableCell>
               <div className="font-medium">{lead.name}</div>
-              <div className="text-sm text-muted-foreground">
-                {lead.phone} - {lead.city}
-              </div>
+              <div className="text-sm text-muted-foreground">{lead.phone}</div>
             </TableCell>
-            <TableCell>
-              <div>{lead.source}</div>
-              <div className="text-sm text-muted-foreground">
-                {lead.company}
-              </div>
-            </TableCell>
+            <TableCell>{lead.city}</TableCell>
+            <TableCell>{lead.company}</TableCell>
             <TableCell>
               <div>{lead.stage}</div>
               <div className="text-sm text-muted-foreground">
                 {lead.lastAction}
               </div>
             </TableCell>
-            <TableCell>
-              <div className="flex items-center gap-2">
-                <Progress value={lead.score} className="h-2 w-20" />
-                <span className="text-sm">{lead.score}</span>
-              </div>
-            </TableCell>
-            <TableCell>
-              <Badge variant="outline">{lead.status}</Badge>
-            </TableCell>
+            <TableCell>{lead.score}</TableCell>
           </TableRow>
         ))}
       </TableBody>
     </Table>
-  );
-}
-
-function ExportCard({
-  title,
-  count,
-  detail,
-  onClick,
-}: {
-  title: string;
-  count: string;
-  detail: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="rounded-lg border border-border bg-background p-4 text-left transition hover:border-primary/50"
-    >
-      <div className="flex items-center justify-between">
-        <p className="font-semibold">{title}</p>
-        <Download className="size-4 text-muted-foreground" />
-      </div>
-      <p className="mt-2 text-3xl font-semibold">{count}</p>
-      <p className="mt-1 text-sm text-muted-foreground">{detail}</p>
-    </button>
-  );
-}
-
-function QueueRow({
-  label,
-  value,
-  icon: Icon,
-}: {
-  label: string;
-  value: string;
-  icon: LucideIcon;
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      <div className="flex size-9 items-center justify-center rounded-lg bg-muted">
-        <Icon className="size-4 text-primary" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium">{label}</p>
-        <p className="text-xs text-muted-foreground">from current connection</p>
-      </div>
-      <p className="font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function AlertLine({ text }: { text: string }) {
-  return (
-    <div className="flex items-start gap-2">
-      <Check className="mt-0.5 size-4 text-[#1fa463]" />
-      <span>{text}</span>
-      <ChevronRight className="ml-auto size-4 text-muted-foreground" />
-    </div>
   );
 }
 
@@ -1269,26 +1191,6 @@ function ControlRow({
       <span className="text-sm font-medium">{label}</span>
       <Switch defaultChecked={checked} />
     </div>
-  );
-}
-
-function SegmentButton({
-  title,
-  count,
-  onClick,
-}: {
-  title: string;
-  count: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex items-center justify-between rounded-lg border border-border bg-background p-3 text-left transition hover:border-primary/50"
-    >
-      <span className="font-medium">{title}</span>
-      <Badge variant="outline">{count}</Badge>
-    </button>
   );
 }
 
@@ -1310,12 +1212,39 @@ function EmptyState({
   );
 }
 
+function buildTrendData(batches: BatchRecord[], templateFilter: string) {
+  return batches
+    .filter(
+      (batch) =>
+        templateFilter === 'all' || batch.templateId === templateFilter,
+    )
+    .slice()
+    .reverse()
+    .map((batch, index) => ({
+      label: `Batch ${index + 1}`,
+      read: batch.read,
+      clicks: batch.clicks,
+      replies: batch.replies,
+      converted: batch.converted,
+    }));
+}
+
+function uniqueValues(values: string[]) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value.trim())
+        .filter((value) => value && value !== '-'),
+    ),
+  ).slice(0, 30);
+}
+
+function templateName(templates: TemplateRecord[], id: string) {
+  return templates.find((template) => template.id === id)?.name || '-';
+}
+
 function connectionText(archive: ArchiveResponse) {
-  if (archive.status === 'connected') {
-    return 'read-only from i-crm';
-  }
-  if (archive.status === 'loading') {
-    return 'loading from i-crm';
-  }
+  if (archive.status === 'connected') return 'read-only from i-crm';
+  if (archive.status === 'loading') return 'loading from i-crm';
   return archive.message || 'connection pending';
 }
