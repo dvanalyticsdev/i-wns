@@ -111,6 +111,26 @@ const emptyArchive: ArchiveResponse = {
   leads: [],
 };
 
+const storageKeys = {
+  templates: 'i-wns-templates',
+  batches: 'i-wns-batches',
+};
+
+function readStoredRecords<T>(key: string): T[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function readInitialReportId() {
+  if (typeof window === 'undefined') return '';
+  return new URLSearchParams(window.location.search).get('report') || '';
+}
+
 const navItems: Array<{ id: ViewId; label: string; icon: LucideIcon }> = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'templates', label: 'Templates', icon: ClipboardList },
@@ -126,15 +146,22 @@ export default function Home() {
   >('checking');
   const [passcode, setPasscode] = useState('');
   const [authError, setAuthError] = useState('');
-  const [activeView, setActiveView] = useState<ViewId>('dashboard');
+  const initialReportId = readInitialReportId();
+  const [activeView, setActiveView] = useState<ViewId>(
+    initialReportId ? 'reporting' : 'dashboard',
+  );
   const [archive, setArchive] = useState<ArchiveResponse>({
     ...emptyArchive,
     status: 'loading',
   });
   const [notice, setNotice] = useState('Loading CRM archive.');
-  const [templates, setTemplates] = useState<TemplateRecord[]>([]);
-  const [batches, setBatches] = useState<BatchRecord[]>([]);
-  const [selectedReportId, setSelectedReportId] = useState('');
+  const [templates, setTemplates] = useState<TemplateRecord[]>(() =>
+    readStoredRecords<TemplateRecord>(storageKeys.templates),
+  );
+  const [batches, setBatches] = useState<BatchRecord[]>(() =>
+    readStoredRecords<BatchRecord>(storageKeys.batches),
+  );
+  const [selectedReportId, setSelectedReportId] = useState(initialReportId);
 
   useEffect(() => {
     let cancelled = false;
@@ -158,6 +185,21 @@ export default function Home() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(
+        storageKeys.templates,
+        JSON.stringify(templates),
+      );
+    }
+  }, [templates]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(storageKeys.batches, JSON.stringify(batches));
+    }
+  }, [batches]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') return;
@@ -949,6 +991,11 @@ function ReportingView({
                       onClick={() => {
                         setSelectedReportId(batch.id);
                         setNotice(`Opened report for ${batch.name}.`);
+                        window.open(
+                          `/?report=${batch.id}`,
+                          '_blank',
+                          'noopener,noreferrer',
+                        );
                       }}
                     >
                       <Eye className="size-4" />
