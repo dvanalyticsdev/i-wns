@@ -709,8 +709,8 @@ function TemplatesView({
           </p>
           <p className="mt-2 text-sm text-muted-foreground">
             Category follows WhatsApp template rules: Marketing for offers and
-            webinar invites, Utility for updates/reminders, Authentication for
-            OTP or login codes.
+            promotional campaigns, Utility for updates/reminders, Authentication
+            for OTP or login codes.
           </p>
         </div>
         {templates.length ? (

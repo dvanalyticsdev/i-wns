@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: 'WhatsApp Reachout System',
   description:
-    'Mock frontend for WhatsApp outreach batches, archived leads, replies, clicks, and webinar conversions.',
+    'WhatsApp outreach system for campaign batches, archived leads, replies, clicks, and conversions.',
 };
 
 export default function RootLayout({
