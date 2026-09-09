@@ -96,6 +96,7 @@ type ArchiveResponse = {
 type SyncResult = {
   syncedCount?: number;
   storedCount?: number;
+  removedStaleCount?: number;
   syncedAt?: string;
   message?: string;
 };
@@ -114,6 +115,7 @@ type BatchRecord = {
   name: string;
   templateId: string;
   leadIds: string[];
+  convertedLeadIds: string[];
   sent: number;
   read: number;
   clicks: number;
@@ -172,7 +174,7 @@ export default function Home() {
     ...emptyArchive,
     status: 'loading',
   });
-  const [notice, setNotice] = useState('Loading CRM archive.');
+  const [, setNotice] = useState('Loading CRM archive.');
   const [templates, setTemplates] = useState<TemplateRecord[]>(() =>
     readStoredRecords<TemplateRecord>(storageKeys.templates),
   );
@@ -395,10 +397,7 @@ export default function Home() {
           <header className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 py-4 backdrop-blur md:px-6">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
-                <p className="truncate text-sm text-muted-foreground">
-                  {notice}
-                </p>
-                <h1 className="mt-1 text-2xl font-semibold tracking-normal">
+                <h1 className="text-2xl font-semibold tracking-normal">
                   {pageTitle}
                 </h1>
               </div>
@@ -442,6 +441,7 @@ export default function Home() {
               leads={archive.leads}
               templates={templates}
               selectedReportId={selectedReportId}
+              setBatches={setBatches}
               setSelectedReportId={setSelectedReportId}
               setNotice={setNotice}
             />
@@ -548,7 +548,10 @@ function DashboardView({
   templates: TemplateRecord[];
 }) {
   const reachedOut = batches.reduce((sum, batch) => sum + batch.sent, 0);
-  const converted = batches.reduce((sum, batch) => sum + batch.converted, 0);
+  const converted = batches.reduce(
+    (sum, batch) => sum + (batch.convertedLeadIds || []).length,
+    0,
+  );
   const [templateFilter, setTemplateFilter] = useState('all');
   const trend = buildTrendData(batches, templateFilter);
 
@@ -897,6 +900,7 @@ function ReachOutView({
       name: batchName.trim(),
       templateId,
       leadIds: selectedLeadIds,
+      convertedLeadIds: [],
       sent: selectedLeadIds.length,
       read: 0,
       clicks: 0,
@@ -1141,6 +1145,7 @@ function ReportingView({
   leads,
   templates,
   selectedReportId,
+  setBatches,
   setSelectedReportId,
   setNotice,
 }: {
@@ -1148,16 +1153,78 @@ function ReportingView({
   leads: ArchiveLead[];
   templates: TemplateRecord[];
   selectedReportId: string;
+  setBatches: (updater: (batches: BatchRecord[]) => BatchRecord[]) => void;
   setSelectedReportId: (id: string) => void;
   setNotice: (notice: string) => void;
 }) {
   const selectedBatch =
     batches.find((batch) => batch.id === selectedReportId) || batches[0];
-  const goodLeads = selectedBatch
-    ? leads.filter(
-        (lead) => selectedBatch.leadIds.includes(lead.id) && lead.score >= 70,
-      )
-    : [];
+  const [reportSearch, setReportSearch] = useState('');
+  const [batchLeads, setBatchLeads] = useState<ArchiveLead[]>([]);
+  const [loadingBatchLeads, setLoadingBatchLeads] = useState(false);
+  const convertedLeadIds = selectedBatch?.convertedLeadIds || [];
+  const searchableBatchLeads = batchLeads.filter((lead) => {
+    const term = reportSearch.toLowerCase().trim();
+    if (!term) return true;
+    return [lead.name, lead.phone, lead.city, lead.company]
+      .join(' ')
+      .toLowerCase()
+      .includes(term);
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadBatchLeads() {
+      if (!selectedBatch) {
+        setBatchLeads([]);
+        return;
+      }
+      setLoadingBatchLeads(true);
+      try {
+        const response = await fetch('/api/archive-leads/by-ids', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ leadIds: selectedBatch.leadIds }),
+        });
+        const data = (await response.json()) as { leads?: ArchiveLead[] };
+        if (!cancelled) {
+          setBatchLeads(data.leads || []);
+        }
+      } catch {
+        if (!cancelled) {
+          setBatchLeads(
+            leads.filter((lead) => selectedBatch.leadIds.includes(lead.id)),
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingBatchLeads(false);
+        }
+      }
+    }
+    void loadBatchLeads();
+    return () => {
+      cancelled = true;
+    };
+  }, [leads, selectedBatch]);
+
+  function toggleConverted(leadId: string) {
+    if (!selectedBatch) return;
+    setBatches((current) =>
+      current.map((batch) => {
+        if (batch.id !== selectedBatch.id) return batch;
+        const existing = batch.convertedLeadIds || [];
+        const nextConvertedLeadIds = existing.includes(leadId)
+          ? existing.filter((id) => id !== leadId)
+          : [...existing, leadId];
+        return {
+          ...batch,
+          convertedLeadIds: nextConvertedLeadIds,
+          converted: nextConvertedLeadIds.length,
+        };
+      }),
+    );
+  }
 
   return (
     <div className="space-y-4 px-4 py-5 md:px-6">
@@ -1178,6 +1245,7 @@ function ReportingView({
                 <TableHead>Read</TableHead>
                 <TableHead>Clicks</TableHead>
                 <TableHead>Replies</TableHead>
+                <TableHead>Converted</TableHead>
                 <TableHead></TableHead>
               </TableRow>
             </TableHeader>
@@ -1197,6 +1265,7 @@ function ReportingView({
                   <TableCell>{batch.read}</TableCell>
                   <TableCell>{batch.clicks}</TableCell>
                   <TableCell>{batch.replies}</TableCell>
+                  <TableCell>{(batch.convertedLeadIds || []).length}</TableCell>
                   <TableCell>
                     <Button
                       variant="outline"
@@ -1249,15 +1318,64 @@ function ReportingView({
             <MiniMetric label="Read" value={selectedBatch.read} />
             <MiniMetric label="Clicks" value={selectedBatch.clicks} />
             <MiniMetric label="Replies" value={selectedBatch.replies} />
-            <MiniMetric label="Converted" value={selectedBatch.converted} />
+            <MiniMetric label="Converted" value={convertedLeadIds.length} />
           </div>
-          <h3 className="mt-5 font-semibold">Good leads</h3>
-          {goodLeads.length ? (
-            <LeadTable leadsToShow={goodLeads} />
+          <div className="mt-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <h3 className="font-semibold">Sent leads</h3>
+            <div className="relative md:w-80">
+              <Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
+              <Input
+                className="pl-9"
+                value={reportSearch}
+                onChange={(event) => setReportSearch(event.target.value)}
+                placeholder="Search sent leads"
+              />
+            </div>
+          </div>
+          {loadingBatchLeads ? (
+            <div className="mt-3 rounded-lg bg-muted p-5 text-sm">
+              Loading sent leads.
+            </div>
+          ) : searchableBatchLeads.length ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Lead</TableHead>
+                  <TableHead>Location</TableHead>
+                  <TableHead>Course</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Converted</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {searchableBatchLeads.map((lead) => (
+                  <TableRow key={lead.id}>
+                    <TableCell>
+                      <div className="font-medium">{lead.name}</div>
+                      <div className="text-sm text-muted-foreground">
+                        {lead.phone}
+                      </div>
+                    </TableCell>
+                    <TableCell>{lead.city}</TableCell>
+                    <TableCell>{lead.company}</TableCell>
+                    <TableCell>Message sent</TableCell>
+                    <TableCell>
+                      <label className="inline-flex cursor-pointer items-center gap-2">
+                        <input
+                          checked={convertedLeadIds.includes(lead.id)}
+                          onChange={() => toggleConverted(lead.id)}
+                          type="checkbox"
+                        />
+                        <span className="text-sm">Mark converted</span>
+                      </label>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           ) : (
             <div className="mt-3 rounded-lg border border-dashed border-border bg-background p-5 text-sm text-muted-foreground">
-              No high-intent leads yet. This will fill from click, reply, and
-              conversion events.
+              No sent leads found for this search.
             </div>
           )}
         </section>
@@ -1350,7 +1468,7 @@ function SyncView({
     try {
       const result = await onSyncCrm();
       setSyncResult(
-        `Done: ${Number(result.syncedCount || 0).toLocaleString()} leads checked and ${Number(result.storedCount || 0).toLocaleString()} leads stored in i-wns.`,
+        `Done: ${Number(result.syncedCount || 0).toLocaleString()} leads checked, ${Number(result.removedStaleCount || 0).toLocaleString()} stale leads removed, and ${Number(result.storedCount || 0).toLocaleString()} leads stored in i-wns.`,
       );
     } catch (error) {
       setSyncResult(
@@ -1472,41 +1590,6 @@ function MiniMetric({ label, value }: { label: string; value: number }) {
   );
 }
 
-function LeadTable({ leadsToShow }: { leadsToShow: ArchiveLead[] }) {
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Lead</TableHead>
-          <TableHead>Location</TableHead>
-          <TableHead>Course</TableHead>
-          <TableHead>Last action</TableHead>
-          <TableHead>Score</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {leadsToShow.map((lead) => (
-          <TableRow key={lead.id}>
-            <TableCell>
-              <div className="font-medium">{lead.name}</div>
-              <div className="text-sm text-muted-foreground">{lead.phone}</div>
-            </TableCell>
-            <TableCell>{lead.city}</TableCell>
-            <TableCell>{lead.company}</TableCell>
-            <TableCell>
-              <div>{lead.stage}</div>
-              <div className="text-sm text-muted-foreground">
-                {lead.lastAction}
-              </div>
-            </TableCell>
-            <TableCell>{lead.score}</TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  );
-}
-
 function ControlRow({
   label,
   description,
@@ -1562,7 +1645,7 @@ function buildTrendData(batches: BatchRecord[], templateFilter: string) {
       read: batch.read,
       clicks: batch.clicks,
       replies: batch.replies,
-      converted: batch.converted,
+      converted: (batch.convertedLeadIds || []).length,
     }));
 }
 

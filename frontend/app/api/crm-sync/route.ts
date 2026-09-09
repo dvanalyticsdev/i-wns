@@ -45,10 +45,13 @@ export async function POST(request: NextRequest) {
     let syncedCount = 0;
     let upsertedCount = 0;
     let modifiedCount = 0;
+    const activeCrmLeadIds: string[] = [];
     let operations: ReturnType<typeof toBulkOperation>[] = [];
 
     for await (const doc of cursor) {
-      operations.push(toBulkOperation(toSyncedLead(doc)));
+      const lead = toSyncedLead(doc);
+      activeCrmLeadIds.push(lead.crmLeadId);
+      operations.push(toBulkOperation(lead));
       if (operations.length >= SYNC_BATCH_SIZE) {
         const result = await wnsCollection.bulkWrite(operations, {
           ordered: false,
@@ -69,6 +72,9 @@ export async function POST(request: NextRequest) {
       modifiedCount += result.modifiedCount;
     }
 
+    const staleDeleteResult = await wnsCollection.deleteMany({
+      crmLeadId: { $nin: activeCrmLeadIds },
+    });
     const storedCount = await wnsCollection.countDocuments({});
 
     return NextResponse.json({
@@ -77,6 +83,7 @@ export async function POST(request: NextRequest) {
       syncedCount,
       upsertedCount,
       modifiedCount,
+      removedStaleCount: staleDeleteResult.deletedCount,
       storedCount,
       database: getWnsDbName(),
       collection: getLeadCollectionName(),
