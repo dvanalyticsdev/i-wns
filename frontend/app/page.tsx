@@ -6,6 +6,8 @@ import {
   Archive,
   BarChart3,
   Check,
+  ChevronLeft,
+  ChevronRight,
   ClipboardList,
   Eye,
   FileSpreadsheet,
@@ -14,6 +16,7 @@ import {
   Paperclip,
   Plus,
   RefreshCw,
+  Search,
   Send,
   Settings,
   ShieldCheck,
@@ -77,9 +80,17 @@ type ArchiveResponse = {
   status: 'idle' | 'loading' | 'connected' | 'missing_config' | 'error';
   message?: string;
   archiveCount: number;
+  filteredCount?: number;
   leads: ArchiveLead[];
+  page?: number;
+  limit?: number;
+  totalPages?: number;
+  cities?: string[];
+  courses?: string[];
   collection?: string;
+  database?: string;
   archiveRule?: string;
+  lastSyncedAt?: string | null;
 };
 
 type TemplateRecord = {
@@ -241,6 +252,61 @@ export default function Home() {
     };
   }, [authStatus]);
 
+  async function loadArchivePage({
+    page = 1,
+    city = 'all',
+    course = 'all',
+    search = '',
+  }: {
+    page?: number;
+    city?: string;
+    course?: string;
+    search?: string;
+  } = {}) {
+    setArchive((current) => ({ ...current, status: 'loading' }));
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: '100',
+      city,
+      course,
+      search,
+    });
+    const response = await fetch(`/api/archive-leads?${params.toString()}`, {
+      cache: 'no-store',
+    });
+    const data = (await response.json()) as ArchiveResponse;
+    if (response.status === 401) {
+      setAuthStatus('locked');
+      setNotice('Passcode required.');
+      return;
+    }
+    setArchive(data);
+    setNotice(
+      response.ok
+        ? `${data.archiveCount.toLocaleString()} synced leads available in i-wns.`
+        : data.message || 'Unable to load i-wns leads.',
+    );
+  }
+
+  async function syncCrmLeads() {
+    setNotice('Syncing Main Admission archive leads from i-crm.');
+    const response = await fetch('/api/crm-sync', { method: 'POST' });
+    const data = (await response.json()) as {
+      status?: string;
+      storedCount?: number;
+      syncedCount?: number;
+      message?: string;
+    };
+    if (!response.ok) {
+      setNotice(data.message || 'CRM sync failed.');
+      return;
+    }
+    await loadArchivePage({ page: 1 });
+    setNotice(
+      `Synced ${Number(data.syncedCount || 0).toLocaleString()} CRM leads into i-wns.`,
+    );
+  }
+
   async function handleLogin(event: { preventDefault: () => void }) {
     event.preventDefault();
     setAuthError('');
@@ -357,6 +423,7 @@ export default function Home() {
             <ReachOutView
               archive={archive}
               templates={templates}
+              loadArchivePage={loadArchivePage}
               setBatches={setBatches}
               setActiveView={setActiveView}
               setSelectedReportId={setSelectedReportId}
@@ -374,7 +441,7 @@ export default function Home() {
             />
           )}
           {activeView === 'sync' && (
-            <SyncView archive={archive} setNotice={setNotice} />
+            <SyncView archive={archive} onSyncCrm={syncCrmLeads} />
           )}
           {activeView === 'settings' && <SettingsView setNotice={setNotice} />}
         </section>
@@ -719,6 +786,7 @@ function TemplatesView({
 function ReachOutView({
   archive,
   templates,
+  loadArchivePage,
   setBatches,
   setActiveView,
   setSelectedReportId,
@@ -726,6 +794,12 @@ function ReachOutView({
 }: {
   archive: ArchiveResponse;
   templates: TemplateRecord[];
+  loadArchivePage: (params: {
+    page?: number;
+    city?: string;
+    course?: string;
+    search?: string;
+  }) => Promise<void>;
   setBatches: (updater: (batches: BatchRecord[]) => BatchRecord[]) => void;
   setActiveView: (view: ViewId) => void;
   setSelectedReportId: (id: string) => void;
@@ -735,16 +809,24 @@ function ReachOutView({
   const [templateId, setTemplateId] = useState('');
   const [city, setCity] = useState('all');
   const [course, setCourse] = useState('all');
+  const [search, setSearch] = useState('');
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
 
-  const cities = uniqueValues(archive.leads.map((lead) => lead.city));
-  const courses = uniqueValues(archive.leads.map((lead) => lead.company));
-  const filteredLeads = archive.leads.filter((lead) => {
-    return (
-      (city === 'all' || lead.city === city) &&
-      (course === 'all' || lead.company === course)
-    );
-  });
+  const currentPage = archive.page || 1;
+  const totalPages = archive.totalPages || 1;
+  const filteredCount = archive.filteredCount ?? archive.archiveCount;
+  const visibleLeads = archive.leads;
+  const cities = archive.cities || [];
+  const courses = archive.courses || [];
+
+  function loadPage(nextPage: number, nextCity = city, nextCourse = course) {
+    return loadArchivePage({
+      page: nextPage,
+      city: nextCity,
+      course: nextCourse,
+      search,
+    });
+  }
 
   function toggleLead(id: string) {
     setSelectedLeadIds((current) =>
@@ -795,7 +877,11 @@ function ReachOutView({
         <div className="grid gap-3 border-b border-border p-4 md:grid-cols-3">
           <Select
             value={city}
-            onValueChange={(value) => value && setCity(value)}
+            onValueChange={(value) => {
+              if (!value) return;
+              setCity(value);
+              void loadPage(1, value, course);
+            }}
           >
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Location" />
@@ -811,7 +897,11 @@ function ReachOutView({
           </Select>
           <Select
             value={course}
-            onValueChange={(value) => value && setCourse(value)}
+            onValueChange={(value) => {
+              if (!value) return;
+              setCourse(value);
+              void loadPage(1, city, value);
+            }}
           >
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Course" />
@@ -828,14 +918,64 @@ function ReachOutView({
           <Button
             variant="outline"
             onClick={() =>
-              setSelectedLeadIds(filteredLeads.map((lead) => lead.id))
+              setSelectedLeadIds((current) =>
+                Array.from(
+                  new Set([...current, ...visibleLeads.map((lead) => lead.id)]),
+                ),
+              )
             }
           >
             <Users className="size-4" />
             Select visible
           </Button>
         </div>
-        {filteredLeads.length ? (
+        <div className="grid gap-3 border-b border-border p-4 md:grid-cols-[minmax(0,1fr)_auto]">
+          <div className="relative">
+            <Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search name, phone, location, course"
+            />
+          </div>
+          <Button
+            variant="outline"
+            onClick={() =>
+              void loadArchivePage({ city, course, page: 1, search })
+            }
+          >
+            Search
+          </Button>
+        </div>
+        <div className="flex flex-col gap-2 border-b border-border px-4 py-3 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
+          <span>
+            Showing page {currentPage.toLocaleString()} of{' '}
+            {totalPages.toLocaleString()} - {visibleLeads.length} leads on this
+            page, {filteredCount.toLocaleString()} matching leads total.
+          </span>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage <= 1}
+              onClick={() => void loadPage(currentPage - 1)}
+            >
+              <ChevronLeft className="size-4" />
+              Page {Math.max(currentPage - 1, 1)}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage >= totalPages}
+              onClick={() => void loadPage(currentPage + 1)}
+            >
+              Page {Math.min(currentPage + 1, totalPages)}
+              <ChevronRight className="size-4" />
+            </Button>
+          </div>
+        </div>
+        {visibleLeads.length ? (
           <Table>
             <TableHeader>
               <TableRow>
@@ -847,7 +987,7 @@ function ReachOutView({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredLeads.map((lead) => (
+              {visibleLeads.map((lead) => (
                 <TableRow key={lead.id}>
                   <TableCell>
                     <input
@@ -1056,11 +1196,22 @@ function ReportingView({
 
 function SyncView({
   archive,
-  setNotice,
+  onSyncCrm,
 }: {
   archive: ArchiveResponse;
-  setNotice: (notice: string) => void;
+  onSyncCrm: () => Promise<void>;
 }) {
+  const [syncing, setSyncing] = useState(false);
+
+  async function handleSync() {
+    setSyncing(true);
+    try {
+      await onSyncCrm();
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-[minmax(0,1fr)_360px]">
       <section className="rounded-lg border border-border bg-card p-4">
@@ -1076,7 +1227,7 @@ function SyncView({
             icon={Archive}
             label="Collection"
             value={archive.collection || '-'}
-            detail="read-only access"
+            detail={archive.database || 'i-wns database'}
           />
           <Metric
             icon={RefreshCw}
@@ -1099,12 +1250,9 @@ function SyncView({
           <ControlRow label="Pull Main Admission archive from i-crm" checked />
           <ControlRow label="Keep i-crm read-only from i-wns" checked />
           <ControlRow label="Store WhatsApp batches in i-wns only" checked />
-          <Button
-            className="w-full"
-            onClick={() => setNotice('CRM archive refreshed.')}
-          >
+          <Button className="w-full" disabled={syncing} onClick={handleSync}>
             <RefreshCw className="size-4" />
-            Refresh view
+            {syncing ? 'Syncing leads' : 'Sync CRM leads'}
           </Button>
         </div>
       </section>
@@ -1274,16 +1422,6 @@ function buildTrendData(batches: BatchRecord[], templateFilter: string) {
       replies: batch.replies,
       converted: batch.converted,
     }));
-}
-
-function uniqueValues(values: string[]) {
-  return Array.from(
-    new Set(
-      values
-        .map((value) => value.trim())
-        .filter((value) => value && value !== '-'),
-    ),
-  ).slice(0, 30);
 }
 
 function templateName(templates: TemplateRecord[], id: string) {
