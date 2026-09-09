@@ -193,8 +193,16 @@ export function toArchiveLead(doc: Document): ArchiveLead {
     source: pickText(doc, ['leadSource', 'source', 'origin']) || 'CRM archive',
     stage,
     lastAction:
-      pickText(doc, ['lastActivity']) ||
-      formatDate(pickText(doc, ['lastActivityAt', 'updatedAt', 'createdAt'])) ||
+      pickText(doc, ['lastAction', 'lastActivity']) ||
+      formatDate(
+        pickText(doc, [
+          'lastActivityAt',
+          'updatedAt',
+          'crmUpdatedAt',
+          'createdAt',
+          'crmCreatedAt',
+        ]),
+      ) ||
       'No recent activity',
     status: pickText(doc, ['status']) || 'Archived',
     score: typeof doc.score === 'number' ? doc.score : scoreLead(stage),
