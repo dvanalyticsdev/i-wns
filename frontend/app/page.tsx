@@ -54,6 +54,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import type { BatchRecord } from '@/lib/batches';
 
 type ViewId =
   | 'dashboard'
@@ -101,6 +102,30 @@ type SyncResult = {
   message?: string;
 };
 
+type BatchListResponse = {
+  batches?: BatchRecord[];
+  message?: string;
+};
+
+type SendBatchResponse = {
+  status?: string;
+  batch?: BatchRecord;
+  sentCount?: number;
+  failedCount?: number;
+  message?: string;
+};
+
+type MetaStatus = {
+  configured: boolean;
+  webhookReady: boolean;
+  signatureCheckReady: boolean;
+  graphVersion: string;
+  phoneNumberId: string;
+  wabaId: string;
+  webhookUrl: string;
+  requiredEnv: string[];
+};
+
 type TemplateRecord = {
   id: string;
   name: string;
@@ -108,24 +133,6 @@ type TemplateRecord = {
   body: string;
   mediaName: string;
   status: 'Draft' | 'Ready';
-};
-
-type BatchRecord = {
-  id: string;
-  name: string;
-  templateId: string;
-  leadIds: string[];
-  readLeadIds?: string[];
-  clickedLeadIds?: string[];
-  repliedLeadIds?: string[];
-  convertedLeadIds: string[];
-  sent: number;
-  read: number;
-  clicks: number;
-  replies: number;
-  converted: number;
-  createdAt: string;
-  status: 'Draft' | 'Sent';
 };
 
 type ReportActionFilter =
@@ -267,6 +274,27 @@ export default function Home() {
       }
     }
     void loadArchive();
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') return;
+
+    let cancelled = false;
+    async function loadBatches() {
+      try {
+        const response = await fetch('/api/batches', { cache: 'no-store' });
+        const data = (await response.json()) as BatchListResponse;
+        if (!cancelled && response.ok) {
+          setBatches(data.batches || []);
+        }
+      } catch {
+        // Browser-stored batches stay visible if the backend is unavailable.
+      }
+    }
+    void loadBatches();
     return () => {
       cancelled = true;
     };
@@ -901,35 +929,36 @@ function ReachOutView({
     );
   }
 
-  function sendBatch() {
+  async function sendBatch() {
     if (!batchName.trim() || !templateId || !selectedLeadIds.length) {
       setNotice('Batch name, template, and at least one lead are required.');
       return;
     }
-    const batch: BatchRecord = {
-      id: crypto.randomUUID(),
-      name: batchName.trim(),
-      templateId,
-      leadIds: selectedLeadIds,
-      readLeadIds: [],
-      clickedLeadIds: [],
-      repliedLeadIds: [],
-      convertedLeadIds: [],
-      sent: selectedLeadIds.length,
-      read: 0,
-      clicks: 0,
-      replies: 0,
-      converted: 0,
-      createdAt: new Date().toLocaleString('en-IN'),
-      status: 'Sent',
-    };
-    setBatches((current) => [batch, ...current]);
-    setSelectedReportId(batch.id);
+    const template = templates.find((item) => item.id === templateId);
+    setNotice('Sending WhatsApp batch through Meta API.');
+    const response = await fetch('/api/batches/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: batchName.trim(),
+        templateId,
+        templateName: template?.name || templateId,
+        languageCode: 'en_US',
+        leadIds: selectedLeadIds,
+      }),
+    });
+    const data = (await response.json()) as SendBatchResponse;
+    if (!response.ok || !data.batch) {
+      setNotice(data.message || 'Unable to send WhatsApp batch.');
+      return;
+    }
+    setBatches((current) => [data.batch as BatchRecord, ...current]);
+    setSelectedReportId(data.batch.id);
     setBatchName('');
     setSelectedLeadIds([]);
     setActiveView('reporting');
     setNotice(
-      'Batch created in this session. Meta sending will be wired next.',
+      `Sent ${Number(data.sentCount || 0).toLocaleString()} messages. ${Number(data.failedCount || 0).toLocaleString()} failed.`,
     );
   }
 
@@ -1228,15 +1257,16 @@ function ReportingView({
     };
   }, [leads, selectedBatch]);
 
-  function toggleConverted(leadId: string) {
+  async function toggleConverted(leadId: string) {
     if (!selectedBatch) return;
+    const shouldConvert = !convertedLeadIds.includes(leadId);
     setBatches((current) =>
       current.map((batch) => {
         if (batch.id !== selectedBatch.id) return batch;
         const existing = batch.convertedLeadIds || [];
-        const nextConvertedLeadIds = existing.includes(leadId)
-          ? existing.filter((id) => id !== leadId)
-          : [...existing, leadId];
+        const nextConvertedLeadIds = shouldConvert
+          ? [...existing, leadId]
+          : existing.filter((id) => id !== leadId);
         return {
           ...batch,
           convertedLeadIds: nextConvertedLeadIds,
@@ -1244,6 +1274,29 @@ function ReportingView({
         };
       }),
     );
+    try {
+      const response = await fetch(`/api/batches/${selectedBatch.id}/converted`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId, converted: shouldConvert }),
+      });
+      const data = (await response.json()) as {
+        batch?: BatchRecord;
+        message?: string;
+      };
+      if (!response.ok || !data.batch) {
+        throw new Error(data.message || 'Unable to update conversion.');
+      }
+      setBatches((current) =>
+        current.map((batch) =>
+          batch.id === data.batch?.id ? (data.batch as BatchRecord) : batch,
+        ),
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : 'Unable to update conversion.',
+      );
+    }
   }
 
   function exportFilteredLeads() {
@@ -1584,8 +1637,68 @@ function SyncView({
 }
 
 function SettingsView({ setNotice }: { setNotice: (notice: string) => void }) {
+  const [metaStatus, setMetaStatus] = useState<MetaStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadMetaStatus() {
+      try {
+        const response = await fetch('/api/meta/status', { cache: 'no-store' });
+        const data = (await response.json()) as MetaStatus;
+        if (!cancelled && response.ok) {
+          setMetaStatus(data);
+        }
+      } catch {
+        if (!cancelled) {
+          setNotice('Unable to load Meta API status.');
+        }
+      }
+    }
+    void loadMetaStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [setNotice]);
+
   return (
-    <div className="px-4 py-5 md:px-6">
+    <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-2">
+      <section className="rounded-lg border border-border bg-card p-4">
+        <h2 className="text-lg font-semibold">Meta WhatsApp API</h2>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <MetaFlag label="Send API" ready={Boolean(metaStatus?.configured)} />
+          <MetaFlag label="Webhook" ready={Boolean(metaStatus?.webhookReady)} />
+          <MetaFlag
+            label="Signature check"
+            ready={Boolean(metaStatus?.signatureCheckReady)}
+          />
+        </div>
+        <div className="mt-4 rounded-lg bg-muted p-3 text-sm">
+          <p className="font-medium">Webhook URL</p>
+          <p className="mt-1 break-all text-muted-foreground">
+            {metaStatus?.webhookUrl || 'Loading'}
+          </p>
+        </div>
+        <div className="mt-4 space-y-2 text-sm">
+          <p>
+            Graph version:{' '}
+            <span className="font-medium">
+              {metaStatus?.graphVersion || '-'}
+            </span>
+          </p>
+          <p>
+            Phone number ID:{' '}
+            <span className="font-medium">
+              {metaStatus?.phoneNumberId || 'not set'}
+            </span>
+          </p>
+          <p>
+            WABA ID:{' '}
+            <span className="font-medium">
+              {metaStatus?.wabaId || 'not set'}
+            </span>
+          </p>
+        </div>
+      </section>
       <section className="rounded-lg border border-border bg-card p-4">
         <h2 className="text-lg font-semibold">WhatsApp sending rules</h2>
         <div className="mt-4 space-y-3">
@@ -1612,7 +1725,7 @@ function SettingsView({ setNotice }: { setNotice: (notice: string) => void }) {
         </div>
       </section>
       <Button
-        className="mt-4"
+        className="xl:col-span-2"
         onClick={() => setNotice('Settings storage is pending backend setup.')}
       >
         <Check className="size-4" />
@@ -1641,6 +1754,15 @@ function Metric({
       </div>
       <p className="mt-3 text-3xl font-semibold tracking-normal">{value}</p>
       {detail && <p className="mt-1 text-sm text-muted-foreground">{detail}</p>}
+    </div>
+  );
+}
+
+function MetaFlag({ label, ready }: { label: string; ready: boolean }) {
+  return (
+    <div className="rounded-lg bg-muted p-3">
+      <p className="text-sm text-muted-foreground">{label}</p>
+      <p className="mt-1 font-semibold">{ready ? 'Ready' : 'Needs setup'}</p>
     </div>
   );
 }

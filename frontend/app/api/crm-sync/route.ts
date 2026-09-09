@@ -35,6 +35,7 @@ export async function POST(request: NextRequest) {
     await wnsCollection.createIndex({ crmLeadId: 1 }, { unique: true });
     await wnsCollection.createIndex({ city: 1 });
     await wnsCollection.createIndex({ company: 1 });
+    await wnsCollection.createIndex({ normalizedPhone: 1 });
     await wnsCollection.createIndex({ crmUpdatedAt: -1, crmCreatedAt: -1 });
 
     const totalInCrm = await crmCollection.countDocuments(crmArchiveFilter());

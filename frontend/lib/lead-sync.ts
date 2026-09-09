@@ -32,6 +32,7 @@ export type SyncedLeadDocument = ArchiveLead & {
   crmLeadId: string;
   leadPipeline: string;
   counselor: string;
+  normalizedPhone: string;
   syncedAt: Date;
   crmUpdatedAt?: Date | string;
   crmCreatedAt?: Date | string;
@@ -168,6 +169,7 @@ export function toSyncedLead(doc: Document): SyncedLeadDocument {
     crmLeadId: lead.id,
     leadPipeline: MAIN_ADMISSION_PIPELINE,
     counselor: ARCHIVED_COUNSELOR,
+    normalizedPhone: normalizePhone(lead.phone),
     syncedAt: new Date(),
     crmUpdatedAt: doc.updatedAt,
     crmCreatedAt: doc.createdAt,
@@ -287,4 +289,8 @@ function cleanFilterValues(values: string[]) {
   return values
     .map((value) => value.trim())
     .filter((value) => value && value !== 'all');
+}
+
+function normalizePhone(phone: string) {
+  return phone.replace(/[^\d]/g, '');
 }
