@@ -115,6 +115,9 @@ type BatchRecord = {
   name: string;
   templateId: string;
   leadIds: string[];
+  readLeadIds?: string[];
+  clickedLeadIds?: string[];
+  repliedLeadIds?: string[];
   convertedLeadIds: string[];
   sent: number;
   read: number;
@@ -124,6 +127,14 @@ type BatchRecord = {
   createdAt: string;
   status: 'Draft' | 'Sent';
 };
+
+type ReportActionFilter =
+  | 'sent'
+  | 'read'
+  | 'clicked'
+  | 'replied'
+  | 'converted'
+  | 'not-opened';
 
 const emptyArchive: ArchiveResponse = {
   status: 'idle',
@@ -900,6 +911,9 @@ function ReachOutView({
       name: batchName.trim(),
       templateId,
       leadIds: selectedLeadIds,
+      readLeadIds: [],
+      clickedLeadIds: [],
+      repliedLeadIds: [],
       convertedLeadIds: [],
       sent: selectedLeadIds.length,
       read: 0,
@@ -1160,10 +1174,16 @@ function ReportingView({
   const selectedBatch =
     batches.find((batch) => batch.id === selectedReportId) || batches[0];
   const [reportSearch, setReportSearch] = useState('');
+  const [actionFilter, setActionFilter] = useState<ReportActionFilter>('sent');
   const [batchLeads, setBatchLeads] = useState<ArchiveLead[]>([]);
   const [loadingBatchLeads, setLoadingBatchLeads] = useState(false);
   const convertedLeadIds = selectedBatch?.convertedLeadIds || [];
-  const searchableBatchLeads = batchLeads.filter((lead) => {
+  const actionFilteredLeads = filterLeadsByAction(
+    batchLeads,
+    selectedBatch,
+    actionFilter,
+  );
+  const searchableBatchLeads = actionFilteredLeads.filter((lead) => {
     const term = reportSearch.toLowerCase().trim();
     if (!term) return true;
     return [lead.name, lead.phone, lead.city, lead.company]
@@ -1223,6 +1243,29 @@ function ReportingView({
           converted: nextConvertedLeadIds.length,
         };
       }),
+    );
+  }
+
+  function exportFilteredLeads() {
+    if (!selectedBatch) return;
+    const rows = searchableBatchLeads.map((lead) => ({
+      name: lead.name,
+      phone: lead.phone,
+      location: lead.city,
+      course: lead.company,
+      action: actionFilter,
+      converted: convertedLeadIds.includes(lead.id) ? 'Yes' : 'No',
+    }));
+    const csv = toCsv(rows);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${selectedBatch.name}-${actionFilter}-leads.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setNotice(
+      `Exported ${rows.length.toLocaleString()} ${actionFilter} leads from ${selectedBatch.name}.`,
     );
   }
 
@@ -1307,10 +1350,11 @@ function ReportingView({
             </div>
             <Button
               variant="outline"
-              onClick={() => setNotice('Excel export prepared for good leads.')}
+              onClick={exportFilteredLeads}
+              disabled={!searchableBatchLeads.length}
             >
               <FileSpreadsheet className="size-4" />
-              Export Excel
+              Export leads
             </Button>
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-5">
@@ -1322,14 +1366,34 @@ function ReportingView({
           </div>
           <div className="mt-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <h3 className="font-semibold">Sent leads</h3>
-            <div className="relative md:w-80">
-              <Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
-              <Input
-                className="pl-9"
-                value={reportSearch}
-                onChange={(event) => setReportSearch(event.target.value)}
-                placeholder="Search sent leads"
-              />
+            <div className="grid gap-2 md:grid-cols-[180px_320px]">
+              <Select
+                value={actionFilter}
+                onValueChange={(value) =>
+                  value && setActionFilter(value as ReportActionFilter)
+                }
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="sent">Sent</SelectItem>
+                  <SelectItem value="read">Read</SelectItem>
+                  <SelectItem value="clicked">Clicked</SelectItem>
+                  <SelectItem value="replied">Replied</SelectItem>
+                  <SelectItem value="converted">Converted</SelectItem>
+                  <SelectItem value="not-opened">Not opened</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
+                <Input
+                  className="pl-9"
+                  value={reportSearch}
+                  onChange={(event) => setReportSearch(event.target.value)}
+                  placeholder="Search filtered leads"
+                />
+              </div>
             </div>
           </div>
           {loadingBatchLeads ? (
@@ -1358,7 +1422,7 @@ function ReportingView({
                     </TableCell>
                     <TableCell>{lead.city}</TableCell>
                     <TableCell>{lead.company}</TableCell>
-                    <TableCell>Message sent</TableCell>
+                    <TableCell>{actionLabel(actionFilter)}</TableCell>
                     <TableCell>
                       <label className="inline-flex cursor-pointer items-center gap-2">
                         <input
@@ -1375,7 +1439,7 @@ function ReportingView({
             </Table>
           ) : (
             <div className="mt-3 rounded-lg border border-dashed border-border bg-background p-5 text-sm text-muted-foreground">
-              No sent leads found for this search.
+              No leads found for this action filter and search.
             </div>
           )}
         </section>
@@ -1651,4 +1715,56 @@ function buildTrendData(batches: BatchRecord[], templateFilter: string) {
 
 function templateName(templates: TemplateRecord[], id: string) {
   return templates.find((template) => template.id === id)?.name || '-';
+}
+
+function filterLeadsByAction(
+  leads: ArchiveLead[],
+  batch: BatchRecord | undefined,
+  action: ReportActionFilter,
+) {
+  if (!batch) return [];
+  const readIds = batch.readLeadIds || [];
+  const clickedIds = batch.clickedLeadIds || [];
+  const repliedIds = batch.repliedLeadIds || [];
+  const convertedIds = batch.convertedLeadIds || [];
+  const actionSets: Record<ReportActionFilter, Set<string>> = {
+    sent: new Set(batch.leadIds),
+    read: new Set(readIds),
+    clicked: new Set(clickedIds),
+    replied: new Set(repliedIds),
+    converted: new Set(convertedIds),
+    'not-opened': new Set(
+      batch.leadIds.filter((leadId) => !readIds.includes(leadId)),
+    ),
+  };
+  const allowed = actionSets[action];
+  return leads.filter((lead) => allowed.has(lead.id));
+}
+
+function actionLabel(action: ReportActionFilter) {
+  const labels: Record<ReportActionFilter, string> = {
+    sent: 'Message sent',
+    read: 'Read',
+    clicked: 'Clicked',
+    replied: 'Replied',
+    converted: 'Converted',
+    'not-opened': 'Not opened',
+  };
+  return labels[action];
+}
+
+function toCsv(rows: Record<string, string>[]) {
+  if (!rows.length) return '';
+  const headers = Object.keys(rows[0]);
+  const lines = [
+    headers.join(','),
+    ...rows.map((row) =>
+      headers.map((header) => csvCell(row[header] || '')).join(','),
+    ),
+  ];
+  return lines.join('\n');
+}
+
+function csvCell(value: string) {
+  return `"${value.replace(/"/g, '""')}"`;
 }
