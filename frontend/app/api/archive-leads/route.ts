@@ -1,9 +1,10 @@
-import { NextResponse } from "next/server";
-import { MongoClient, type Document } from "mongodb";
+import { NextResponse } from 'next/server';
+import { MongoClient, type Document } from 'mongodb';
 
-const ARCHIVED_COUNSELOR = "Archived Leads";
-const DEFAULT_DB_NAME = "i-crm-workshop";
-const DEFAULT_LEADS_COLLECTION = "leads";
+const ARCHIVED_COUNSELOR = 'Archived Leads';
+const MAIN_ADMISSION_PIPELINE = 'main-admission';
+const DEFAULT_DB_NAME = 'i-crm-workshop';
+const DEFAULT_LEADS_COLLECTION = 'leads';
 
 let cachedClient: MongoClient | null = null;
 
@@ -26,8 +27,8 @@ export async function GET() {
     if (!uri) {
       return NextResponse.json(
         {
-          status: "missing_config",
-          message: "MONGODB_URI is not configured for i-wns.",
+          status: 'missing_config',
+          message: 'MONGODB_URI is not configured for i-wns.',
           archiveCount: 0,
           leads: [],
         },
@@ -41,9 +42,14 @@ export async function GET() {
       process.env.MONGODB_LEADS_COLLECTION || DEFAULT_LEADS_COLLECTION,
     );
     const archiveFilter = {
-      $or: [
-        { lsqArchivedLead: true },
-        { counselor: new RegExp(`^${ARCHIVED_COUNSELOR}$`, "i") },
+      $and: [
+        {
+          $or: [
+            { lsqArchivedLead: true },
+            { counselor: new RegExp(`^${ARCHIVED_COUNSELOR}$`, 'i') },
+          ],
+        },
+        { leadPipeline: MAIN_ADMISSION_PIPELINE },
       ],
     };
 
@@ -88,20 +94,21 @@ export async function GET() {
     ]);
 
     return NextResponse.json({
-      status: "connected",
+      status: 'connected',
       archiveCount,
       leads: docs.map(toArchiveLead),
-      collection: "leads",
-      archiveRule: "lsqArchivedLead=true or counselor=Archived Leads",
+      collection: 'leads',
+      archiveRule:
+        'Main Admission Calling only: leadPipeline=main-admission and archived lead rule',
     });
   } catch (error) {
     return NextResponse.json(
       {
-        status: "error",
+        status: 'error',
         message:
           error instanceof Error
             ? error.message
-            : "Unable to load archived leads.",
+            : 'Unable to load archived leads.',
         archiveCount: 0,
         leads: [],
       },
@@ -119,35 +126,37 @@ async function getClient(uri: string) {
 }
 
 function toArchiveLead(doc: Document): ArchiveLead {
-  const id = String(doc._id || "");
-  const firstName = pickText(doc, ["firstName"]);
-  const lastName = pickText(doc, ["lastName"]);
-  const composedName = [firstName, lastName].filter(Boolean).join(" ");
+  const id = String(doc._id || '');
+  const firstName = pickText(doc, ['firstName']);
+  const lastName = pickText(doc, ['lastName']);
+  const composedName = [firstName, lastName].filter(Boolean).join(' ');
   const name =
-    pickText(doc, ["name", "fullName", "leadName"]) || composedName || "Unnamed lead";
+    pickText(doc, ['name', 'fullName', 'leadName']) ||
+    composedName ||
+    'Unnamed lead';
   const stage =
     pickText(doc, [
-      "admissionStatus",
-      "courseStatus",
-      "wsStatus",
-      "leadPipeline",
-    ]) || "Archived";
+      'admissionStatus',
+      'courseStatus',
+      'wsStatus',
+      'leadPipeline',
+    ]) || 'Archived';
 
   return {
     id,
     name,
     company:
-      pickText(doc, ["company", "organization", "courseName", "workshop"]) ||
-      "Not specified",
-    phone: pickText(doc, ["phone", "phoneNumber", "mobile", "mx_Phone"]) || "-",
-    city: pickText(doc, ["city"]) || "-",
-    source: pickText(doc, ["leadSource", "source", "origin"]) || "CRM archive",
+      pickText(doc, ['company', 'organization', 'courseName', 'workshop']) ||
+      'Not specified',
+    phone: pickText(doc, ['phone', 'phoneNumber', 'mobile', 'mx_Phone']) || '-',
+    city: pickText(doc, ['city']) || '-',
+    source: pickText(doc, ['leadSource', 'source', 'origin']) || 'CRM archive',
     stage,
     lastAction:
-      pickText(doc, ["lastActivity"]) ||
-      formatDate(pickText(doc, ["lastActivityAt", "updatedAt", "createdAt"])) ||
-      "No recent activity",
-    status: "Archived",
+      pickText(doc, ['lastActivity']) ||
+      formatDate(pickText(doc, ['lastActivityAt', 'updatedAt', 'createdAt'])) ||
+      'No recent activity',
+    status: 'Archived',
     score: scoreLead(stage),
   };
 }
@@ -155,40 +164,40 @@ function toArchiveLead(doc: Document): ArchiveLead {
 function pickText(doc: Document, keys: string[]) {
   for (const key of keys) {
     const value = doc[key];
-    if (typeof value === "string" && value.trim()) {
+    if (typeof value === 'string' && value.trim()) {
       return value.trim();
     }
-    if (typeof value === "number") {
+    if (typeof value === 'number') {
       return String(value);
     }
     if (value instanceof Date) {
       return value.toISOString();
     }
   }
-  return "";
+  return '';
 }
 
 function formatDate(value: string) {
   if (!value) {
-    return "";
+    return '';
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return `Updated ${date.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
+  return `Updated ${date.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
   })}`;
 }
 
 function scoreLead(stage: string) {
   const normalized = stage.toLowerCase();
-  if (normalized.includes("interested") || normalized.includes("won")) {
+  if (normalized.includes('interested') || normalized.includes('won')) {
     return 80;
   }
-  if (normalized.includes("not interested") || normalized.includes("lost")) {
+  if (normalized.includes('not interested') || normalized.includes('lost')) {
     return 20;
   }
   return 50;
