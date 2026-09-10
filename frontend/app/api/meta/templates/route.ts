@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server';
 
 import { isAuthenticated, unauthorizedResponse } from '@/lib/auth';
 import { getWnsClient, getWnsDbName } from '@/lib/lead-sync';
+import { getMetaConfig } from '@/lib/meta-whatsapp';
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,10 +12,11 @@ export async function GET(request: NextRequest) {
     }
 
     const client = await getWnsClient();
+    const config = getMetaConfig();
     const docs = await client
       .db(getWnsDbName())
       .collection('whatsappTemplates')
-      .find({})
+      .find({ wabaId: config.wabaId })
       .sort({ status: 1, name: 1, language: 1 })
       .toArray();
 

@@ -3,7 +3,7 @@ import type { NextRequest } from 'next/server';
 
 import { isAuthenticated, unauthorizedResponse } from '@/lib/auth';
 import { getWnsClient, getWnsDbName } from '@/lib/lead-sync';
-import { listMetaTemplates } from '@/lib/meta-whatsapp';
+import { getMetaConfig, listMetaTemplates } from '@/lib/meta-whatsapp';
 
 export async function POST(request: NextRequest) {
   try {
@@ -11,6 +11,7 @@ export async function POST(request: NextRequest) {
       return unauthorizedResponse();
     }
 
+    const config = getMetaConfig();
     const templates = await listMetaTemplates();
     const client = await getWnsClient();
     const collection = client.db(getWnsDbName()).collection('whatsappTemplates');
@@ -21,12 +22,14 @@ export async function POST(request: NextRequest) {
         templates.map((template) => ({
           updateOne: {
             filter: {
+              wabaId: config.wabaId,
               name: template.name,
               language: template.language,
             },
             update: {
               $set: {
                 ...template,
+                wabaId: config.wabaId,
                 metaTemplateId: template.id,
                 syncedAt,
               },
@@ -41,9 +44,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const staleDeleteResult = await collection.deleteMany({
+      $or: [
+        { wabaId: { $ne: config.wabaId } },
+        templates.length
+          ? {
+              wabaId: config.wabaId,
+              $nor: templates.map((template) => ({
+                name: template.name,
+                language: template.language,
+              })),
+            }
+          : { wabaId: config.wabaId },
+      ],
+    });
+
     return NextResponse.json({
       status: 'synced',
       syncedCount: templates.length,
+      removedStaleCount: staleDeleteResult.deletedCount,
       syncedAt: syncedAt.toISOString(),
     });
   } catch (error) {
