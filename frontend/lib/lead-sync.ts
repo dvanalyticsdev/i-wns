@@ -33,6 +33,7 @@ export type SyncedLeadDocument = ArchiveLead & {
   leadPipeline: string;
   counselor: string;
   normalizedPhone: string;
+  isTestLead?: boolean;
   syncedAt: Date;
   crmUpdatedAt?: Date | string;
   crmCreatedAt?: Date | string;

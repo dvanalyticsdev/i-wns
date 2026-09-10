@@ -132,7 +132,9 @@ type TemplateRecord = {
   category: string;
   body: string;
   mediaName: string;
-  status: 'Draft' | 'Ready';
+  status: string;
+  language?: string;
+  source?: 'draft' | 'meta';
 };
 
 type ReportActionFilter =
@@ -196,6 +198,7 @@ export default function Home() {
   const [templates, setTemplates] = useState<TemplateRecord[]>(() =>
     readStoredRecords<TemplateRecord>(storageKeys.templates),
   );
+  const [metaTemplates, setMetaTemplates] = useState<TemplateRecord[]>([]);
   const [batches, setBatches] = useState<BatchRecord[]>(() =>
     readStoredRecords<BatchRecord>(storageKeys.batches),
   );
@@ -274,6 +277,31 @@ export default function Home() {
       }
     }
     void loadArchive();
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') return;
+
+    let cancelled = false;
+    async function loadMetaTemplates() {
+      try {
+        const response = await fetch('/api/meta/templates', {
+          cache: 'no-store',
+        });
+        const data = (await response.json()) as {
+          templates?: TemplateRecord[];
+        };
+        if (!cancelled && response.ok) {
+          setMetaTemplates(data.templates || []);
+        }
+      } catch {
+        // Template sync can be triggered manually from the Templates page.
+      }
+    }
+    void loadMetaTemplates();
     return () => {
       cancelled = true;
     };
@@ -459,14 +487,16 @@ export default function Home() {
           {activeView === 'templates' && (
             <TemplatesView
               templates={templates}
+              metaTemplates={metaTemplates}
               setTemplates={setTemplates}
+              setMetaTemplates={setMetaTemplates}
               setNotice={setNotice}
             />
           )}
           {activeView === 'reachout' && (
             <ReachOutView
               archive={archive}
-              templates={templates}
+              templates={metaTemplates}
               loadArchivePage={loadArchivePage}
               setBatches={setBatches}
               setActiveView={setActiveView}
@@ -478,7 +508,7 @@ export default function Home() {
             <ReportingView
               batches={batches}
               leads={archive.leads}
-              templates={templates}
+              templates={[...metaTemplates, ...templates]}
               selectedReportId={selectedReportId}
               setBatches={setBatches}
               setSelectedReportId={setSelectedReportId}
@@ -693,19 +723,24 @@ function DashboardView({
 
 function TemplatesView({
   templates,
+  metaTemplates,
   setTemplates,
+  setMetaTemplates,
   setNotice,
 }: {
   templates: TemplateRecord[];
+  metaTemplates: TemplateRecord[];
   setTemplates: (
     updater: (templates: TemplateRecord[]) => TemplateRecord[],
   ) => void;
+  setMetaTemplates: (templates: TemplateRecord[]) => void;
   setNotice: (notice: string) => void;
 }) {
   const [name, setName] = useState('');
   const [category, setCategory] = useState('Marketing');
   const [body, setBody] = useState('');
   const [mediaName, setMediaName] = useState('');
+  const [syncingTemplates, setSyncingTemplates] = useState(false);
 
   function addTemplate() {
     if (!name.trim() || !body.trim()) {
@@ -719,74 +754,126 @@ function TemplatesView({
       body: body.trim(),
       mediaName,
       status: 'Draft',
+      source: 'draft',
     };
     setTemplates((current) => [template, ...current]);
     setName('');
     setBody('');
     setMediaName('');
-    setNotice('Template added for this browser session.');
+    setNotice(
+      'Draft template added in i-wns. Submit the same template in Meta before sending.',
+    );
+  }
+
+  async function syncMetaTemplates() {
+    setSyncingTemplates(true);
+    try {
+      const syncResponse = await fetch('/api/meta/templates/sync', {
+        method: 'POST',
+      });
+      const syncData = (await syncResponse.json()) as {
+        syncedCount?: number;
+        message?: string;
+      };
+      if (!syncResponse.ok) {
+        throw new Error(syncData.message || 'Unable to sync Meta templates.');
+      }
+      const listResponse = await fetch('/api/meta/templates', {
+        cache: 'no-store',
+      });
+      const listData = (await listResponse.json()) as {
+        templates?: TemplateRecord[];
+        message?: string;
+      };
+      if (!listResponse.ok) {
+        throw new Error(listData.message || 'Unable to load Meta templates.');
+      }
+      setMetaTemplates(listData.templates || []);
+      setNotice(
+        `Synced ${Number(syncData.syncedCount || 0).toLocaleString()} templates from Meta.`,
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : 'Unable to sync templates.',
+      );
+    } finally {
+      setSyncingTemplates(false);
+    }
   }
 
   return (
     <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-[minmax(0,1fr)_430px]">
-      <section className="rounded-lg border border-border bg-card">
-        <div className="border-b border-border p-4">
-          <h2 className="text-lg font-semibold">Templates</h2>
-          <p className="text-sm text-muted-foreground">
-            Manage message text and media before using a template in Reach Out.
-          </p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Category follows WhatsApp template rules: Marketing for offers and
-            promotional campaigns, Utility for updates/reminders, Authentication
-            for OTP or login codes.
-          </p>
-        </div>
-        {templates.length ? (
+      <div className="space-y-4">
+        <section className="rounded-lg border border-border bg-card">
+          <div className="flex flex-col gap-3 border-b border-border p-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Meta approved templates</h2>
+              <p className="text-sm text-muted-foreground">
+                Only Active Meta templates can be selected for WhatsApp sending.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              disabled={syncingTemplates}
+              onClick={() => void syncMetaTemplates()}
+            >
+              <RefreshCw className="size-4" />
+              {syncingTemplates ? 'Syncing' : 'Sync Meta'}
+            </Button>
+          </div>
+          {metaTemplates.length ? (
+            <div className="grid gap-3 p-4">
+              {metaTemplates.map((template) => (
+                <TemplateCard
+                  key={template.id}
+                  template={template}
+                  sendReady={isApprovedMetaTemplate(template)}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              icon={ClipboardList}
+              title="No Meta templates synced"
+              text="Click Sync Meta after creating or approving templates in WhatsApp Manager."
+            />
+          )}
+        </section>
+
+        <section className="rounded-lg border border-border bg-card">
+          <div className="border-b border-border p-4">
+            <h2 className="text-lg font-semibold">Draft templates</h2>
+            <p className="text-sm text-muted-foreground">
+              Drafts are for planning copy in i-wns only. Create and approve the
+              same template in Meta before it can be sent.
+            </p>
+          </div>
+          {templates.length ? (
           <div className="grid gap-3 p-4">
             {templates.map((template) => (
-              <article
+              <TemplateCard
                 key={template.id}
-                className="rounded-lg border border-border bg-background p-4"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h3 className="font-semibold">{template.name}</h3>
-                    <p className="text-sm text-muted-foreground">
-                      {template.category}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    {template.mediaName && (
-                      <Badge variant="outline">
-                        <Paperclip className="size-3" />
-                        media
-                      </Badge>
-                    )}
-                    <Badge>{template.status}</Badge>
-                  </div>
-                </div>
-                <p className="mt-3 text-sm text-muted-foreground">
-                  {template.body}
-                </p>
-                {template.mediaName && (
-                  <p className="mt-2 text-sm font-medium">
-                    {template.mediaName}
-                  </p>
-                )}
-              </article>
+                template={template}
+                sendReady={false}
+              />
             ))}
           </div>
         ) : (
           <EmptyState
             icon={ClipboardList}
-            title="No templates yet"
-            text="Create your first WhatsApp template here. Backend persistence and Meta approval sync can be added next."
+            title="No draft templates"
+            text="Use drafts to prepare copy before submitting it in Meta."
           />
         )}
       </section>
+      </div>
 
       <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-lg font-semibold">Add template</h2>
+        <h2 className="text-lg font-semibold">Add draft template</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          This does not submit to Meta. It is for planning and maintaining copy
+          in i-wns.
+        </p>
         <div className="mt-4 space-y-3">
           <Input
             value={name}
@@ -825,11 +912,65 @@ function TemplatesView({
           </label>
           <Button className="w-full" onClick={addTemplate}>
             <Plus className="size-4" />
-            Add template
+            Add draft
           </Button>
+          <div className="rounded-lg bg-muted p-3 text-xs text-muted-foreground">
+            For sending, create/approve the template in Meta, then click Sync
+            Meta. Reach Out will only show active Meta templates.
+          </div>
         </div>
       </section>
     </div>
+  );
+}
+
+function TemplateCard({
+  template,
+  sendReady,
+}: {
+  template: TemplateRecord;
+  sendReady: boolean;
+}) {
+  return (
+    <article className="rounded-lg border border-border bg-background p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="font-semibold">{template.name}</h3>
+          <p className="text-sm text-muted-foreground">
+            {template.category}
+            {template.language ? ` - ${template.language}` : ''}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {template.mediaName && (
+            <Badge variant="outline">
+              <Paperclip className="size-3" />
+              media
+            </Badge>
+          )}
+          <Badge variant={sendReady ? 'default' : 'outline'}>
+            {sendReady ? 'Ready to send' : template.status || 'Draft only'}
+          </Badge>
+        </div>
+      </div>
+      <p className="mt-3 text-sm text-muted-foreground">
+        {template.body || 'No body text synced.'}
+      </p>
+      {!sendReady && (
+        <p className="mt-3 rounded-lg bg-muted p-3 text-xs text-muted-foreground">
+          {template.source === 'meta'
+            ? 'This Meta template is not active yet, so it cannot be used in Reach Out.'
+            : 'Draft only. Create and approve the same template in Meta, then sync it here.'}
+        </p>
+      )}
+    </article>
+  );
+}
+
+function isApprovedMetaTemplate(template: TemplateRecord) {
+  return (
+    template.source === 'meta' &&
+    ['APPROVED', 'ACTIVE'].includes(String(template.status || '').toUpperCase())
   );
 }
 
@@ -871,6 +1012,7 @@ function ReachOutView({
   const visibleLeads = archive.leads;
   const cities = archive.cities || [];
   const courses = archive.courses || [];
+  const sendTemplates = templates.filter(isApprovedMetaTemplate);
 
   function loadPage(
     nextPage: number,
@@ -934,7 +1076,11 @@ function ReachOutView({
       setNotice('Batch name, template, and at least one lead are required.');
       return;
     }
-    const template = templates.find((item) => item.id === templateId);
+    const template = sendTemplates.find((item) => item.id === templateId);
+    if (!template) {
+      setNotice('Choose an active Meta template before sending.');
+      return;
+    }
     setNotice('Sending WhatsApp batch through Meta API.');
     const response = await fetch('/api/batches/send', {
       method: 'POST',
@@ -943,7 +1089,7 @@ function ReachOutView({
         name: batchName.trim(),
         templateId,
         templateName: template?.name || templateId,
-        languageCode: 'en_US',
+        languageCode: template.language || 'en_US',
         leadIds: selectedLeadIds,
       }),
     });
@@ -1151,14 +1297,16 @@ function ReachOutView({
                 <SelectValue placeholder="Choose template" />
               </SelectTrigger>
               <SelectContent>
-                {templates.length ? (
-                  templates.map((template) => (
+                {sendTemplates.length ? (
+                  sendTemplates.map((template) => (
                     <SelectItem key={template.id} value={template.id}>
-                      {template.name}
+                      {template.name} ({template.language || 'en_US'})
                     </SelectItem>
                   ))
                 ) : (
-                  <SelectItem value="none">No templates added</SelectItem>
+                  <SelectItem value="none">
+                    No active Meta templates synced
+                  </SelectItem>
                 )}
               </SelectContent>
             </Select>
@@ -1171,7 +1319,7 @@ function ReachOutView({
             <Button
               className="w-full"
               onClick={sendBatch}
-              disabled={!templates.length}
+              disabled={!sendTemplates.length}
             >
               <Send className="size-4" />
               Send message

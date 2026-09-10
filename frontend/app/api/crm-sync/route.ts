@@ -74,6 +74,7 @@ export async function POST(request: NextRequest) {
     }
 
     const staleDeleteResult = await wnsCollection.deleteMany({
+      isTestLead: { $ne: true },
       crmLeadId: { $nin: activeCrmLeadIds },
     });
     const storedCount = await wnsCollection.countDocuments({});
