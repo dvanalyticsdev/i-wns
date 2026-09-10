@@ -10,7 +10,9 @@ export type BatchRecord = {
   clickedLeadIds?: string[];
   repliedLeadIds?: string[];
   convertedLeadIds: string[];
+  failedLeadIds?: string[];
   sent: number;
+  failed: number;
   read: number;
   clicks: number;
   replies: number;
@@ -24,6 +26,7 @@ export function toBatchRecord(doc: WithId<Document>): BatchRecord {
   const clickedLeadIds = toStringArray(doc.clickedLeadIds);
   const repliedLeadIds = toStringArray(doc.repliedLeadIds);
   const convertedLeadIds = toStringArray(doc.convertedLeadIds);
+  const failedLeadIds = toStringArray(doc.failedLeadIds);
   const leadIds = toStringArray(doc.leadIds);
   return {
     id: String(doc._id),
@@ -35,7 +38,9 @@ export function toBatchRecord(doc: WithId<Document>): BatchRecord {
     clickedLeadIds,
     repliedLeadIds,
     convertedLeadIds,
-    sent: Number(doc.sent || leadIds.length || 0),
+    failedLeadIds,
+    sent: Number(doc.sent ?? leadIds.length ?? 0),
+    failed: Number(doc.failed ?? failedLeadIds.length ?? 0),
     read: readLeadIds.length,
     clicks: clickedLeadIds.length,
     replies: repliedLeadIds.length,

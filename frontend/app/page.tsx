@@ -138,12 +138,46 @@ type TemplateRecord = {
 };
 
 type ReportActionFilter =
+  | 'all'
   | 'sent'
+  | 'failed'
   | 'read'
   | 'clicked'
   | 'replied'
   | 'converted'
   | 'not-opened';
+
+type ReportLeadRow = {
+  lead: ArchiveLead;
+  messageStatus: string;
+  metaMessageId: string;
+  error: string;
+  read: boolean;
+  clicked: boolean;
+  replied: boolean;
+  converted: boolean;
+  replies: Array<{ text: string; receivedAt?: string; type: string }>;
+};
+
+type BatchReportResponse = {
+  status?: string;
+  message?: string;
+  batch?: BatchRecord;
+  totals?: {
+    requested: number;
+    sent: number;
+    failed: number;
+    read: number;
+    clicked: number;
+    replied: number;
+    converted: number;
+  };
+  page?: number;
+  limit?: number;
+  totalRows?: number;
+  totalPages?: number;
+  rows?: ReportLeadRow[];
+};
 
 const emptyArchive: ArchiveResponse = {
   status: 'idle',
@@ -1348,69 +1382,67 @@ function ReportingView({
   setSelectedReportId: (id: string) => void;
   setNotice: (notice: string) => void;
 }) {
-  const selectedBatch =
-    batches.find((batch) => batch.id === selectedReportId) || batches[0];
+  const selectedBatch = batches.find((batch) => batch.id === selectedReportId);
   const [reportSearch, setReportSearch] = useState('');
-  const [actionFilter, setActionFilter] = useState<ReportActionFilter>('sent');
-  const [batchLeads, setBatchLeads] = useState<ArchiveLead[]>([]);
-  const [loadingBatchLeads, setLoadingBatchLeads] = useState(false);
-  const convertedLeadIds = selectedBatch?.convertedLeadIds || [];
-  const actionFilteredLeads = filterLeadsByAction(
-    batchLeads,
-    selectedBatch,
-    actionFilter,
+  const [actionFilter, setActionFilter] = useState<ReportActionFilter>('all');
+  const [reportPage, setReportPage] = useState(1);
+  const [reportData, setReportData] = useState<BatchReportResponse | null>(
+    null,
   );
-  const searchableBatchLeads = actionFilteredLeads.filter((lead) => {
-    const term = reportSearch.toLowerCase().trim();
-    if (!term) return true;
-    return [lead.name, lead.phone, lead.city, lead.company]
-      .join(' ')
-      .toLowerCase()
-      .includes(term);
-  });
+  const [loadingReport, setLoadingReport] = useState(false);
+  const reportBatch = reportData?.batch || selectedBatch;
+  const reportRows = reportData?.rows || [];
+  const convertedLeadIds = reportBatch?.convertedLeadIds || [];
 
   useEffect(() => {
     let cancelled = false;
-    async function loadBatchLeads() {
-      if (!selectedBatch) {
-        setBatchLeads([]);
+    async function loadReport() {
+      if (!selectedReportId) {
+        setReportData(null);
         return;
       }
-      setLoadingBatchLeads(true);
+      setLoadingReport(true);
       try {
-        const response = await fetch('/api/archive-leads/by-ids', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ leadIds: selectedBatch.leadIds }),
+        const params = new URLSearchParams({
+          page: String(reportPage),
+          action: actionFilter,
+          search: reportSearch,
         });
-        const data = (await response.json()) as { leads?: ArchiveLead[] };
-        if (!cancelled) {
-          setBatchLeads(data.leads || []);
+        const response = await fetch(
+          `/api/batches/${selectedReportId}/report?${params.toString()}`,
+          { cache: 'no-store' },
+        );
+        const data = (await response.json()) as BatchReportResponse;
+        if (!response.ok) {
+          throw new Error(data.message || 'Unable to load report.');
         }
-      } catch {
         if (!cancelled) {
-          setBatchLeads(
-            leads.filter((lead) => selectedBatch.leadIds.includes(lead.id)),
+          setReportData(data);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setNotice(
+            error instanceof Error ? error.message : 'Unable to load report.',
           );
         }
       } finally {
         if (!cancelled) {
-          setLoadingBatchLeads(false);
+          setLoadingReport(false);
         }
       }
     }
-    void loadBatchLeads();
+    void loadReport();
     return () => {
       cancelled = true;
     };
-  }, [leads, selectedBatch]);
+  }, [actionFilter, reportPage, reportSearch, selectedReportId, setNotice]);
 
   async function toggleConverted(leadId: string) {
-    if (!selectedBatch) return;
+    if (!reportBatch) return;
     const shouldConvert = !convertedLeadIds.includes(leadId);
     setBatches((current) =>
       current.map((batch) => {
-        if (batch.id !== selectedBatch.id) return batch;
+        if (batch.id !== reportBatch.id) return batch;
         const existing = batch.convertedLeadIds || [];
         const nextConvertedLeadIds = shouldConvert
           ? [...existing, leadId]
@@ -1423,7 +1455,7 @@ function ReportingView({
       }),
     );
     try {
-      const response = await fetch(`/api/batches/${selectedBatch.id}/converted`, {
+      const response = await fetch(`/api/batches/${reportBatch.id}/converted`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ leadId, converted: shouldConvert }),
@@ -1440,6 +1472,19 @@ function ReportingView({
           batch.id === data.batch?.id ? (data.batch as BatchRecord) : batch,
         ),
       );
+      setReportData((current) =>
+        current
+          ? {
+              ...current,
+              batch: data.batch,
+              rows: current.rows?.map((row) =>
+                row.lead.id === leadId
+                  ? { ...row, converted: shouldConvert }
+                  : row,
+              ),
+            }
+          : current,
+      );
     } catch (error) {
       setNotice(
         error instanceof Error ? error.message : 'Unable to update conversion.',
@@ -1448,25 +1493,30 @@ function ReportingView({
   }
 
   function exportFilteredLeads() {
-    if (!selectedBatch) return;
-    const rows = searchableBatchLeads.map((lead) => ({
-      name: lead.name,
-      phone: lead.phone,
-      location: lead.city,
-      course: lead.company,
-      action: actionFilter,
-      converted: convertedLeadIds.includes(lead.id) ? 'Yes' : 'No',
+    if (!reportBatch) return;
+    const rows = reportRows.map((row) => ({
+      name: row.lead.name,
+      phone: row.lead.phone,
+      location: row.lead.city,
+      course: row.lead.company,
+      status: reportStatusLabel(row),
+      read: row.read ? 'Yes' : 'No',
+      clicked: row.clicked ? 'Yes' : 'No',
+      replied: row.replied ? 'Yes' : 'No',
+      reply: row.replies.map((reply) => reply.text).join(' | '),
+      error: row.error,
+      converted: row.converted ? 'Yes' : 'No',
     }));
     const csv = toCsv(rows);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `${selectedBatch.name}-${actionFilter}-leads.csv`;
+    anchor.download = `${reportBatch.name}-${actionFilter}-leads.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
     setNotice(
-      `Exported ${rows.length.toLocaleString()} ${actionFilter} leads from ${selectedBatch.name}.`,
+      `Exported ${rows.length.toLocaleString()} ${actionFilter} leads from ${reportBatch.name}.`,
     );
   }
 
@@ -1486,6 +1536,7 @@ function ReportingView({
                 <TableHead>Batch</TableHead>
                 <TableHead>Template</TableHead>
                 <TableHead>Sent</TableHead>
+                <TableHead>Failed</TableHead>
                 <TableHead>Read</TableHead>
                 <TableHead>Clicks</TableHead>
                 <TableHead>Replies</TableHead>
@@ -1506,6 +1557,7 @@ function ReportingView({
                     {templateName(templates, batch.templateId)}
                   </TableCell>
                   <TableCell>{batch.sent}</TableCell>
+                  <TableCell>{batch.failed}</TableCell>
                   <TableCell>{batch.read}</TableCell>
                   <TableCell>{batch.clicks}</TableCell>
                   <TableCell>{batch.replies}</TableCell>
@@ -1514,8 +1566,6 @@ function ReportingView({
                     <Button
                       variant="outline"
                       onClick={() => {
-                        setSelectedReportId(batch.id);
-                        setNotice(`Opened report for ${batch.name}.`);
                         window.open(
                           `/?report=${batch.id}`,
                           '_blank',
@@ -1540,29 +1590,30 @@ function ReportingView({
         )}
       </section>
 
-      {selectedBatch && (
+      {selectedReportId && reportBatch && (
         <section className="rounded-lg border border-border bg-card p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h2 className="text-lg font-semibold">{selectedBatch.name}</h2>
+              <h2 className="text-lg font-semibold">{reportBatch.name}</h2>
               <p className="text-sm text-muted-foreground">
-                In-depth report tab
+                In-depth report tab - 100 leads per page
               </p>
             </div>
             <Button
               variant="outline"
               onClick={exportFilteredLeads}
-              disabled={!searchableBatchLeads.length}
+              disabled={!reportRows.length}
             >
               <FileSpreadsheet className="size-4" />
               Export leads
             </Button>
           </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-5">
-            <MiniMetric label="Sent" value={selectedBatch.sent} />
-            <MiniMetric label="Read" value={selectedBatch.read} />
-            <MiniMetric label="Clicks" value={selectedBatch.clicks} />
-            <MiniMetric label="Replies" value={selectedBatch.replies} />
+          <div className="mt-4 grid gap-3 md:grid-cols-6">
+            <MiniMetric label="Sent" value={reportData?.totals?.sent || 0} />
+            <MiniMetric label="Failed" value={reportData?.totals?.failed || 0} />
+            <MiniMetric label="Read" value={reportData?.totals?.read || 0} />
+            <MiniMetric label="Clicks" value={reportData?.totals?.clicked || 0} />
+            <MiniMetric label="Replies" value={reportData?.totals?.replied || 0} />
             <MiniMetric label="Converted" value={convertedLeadIds.length} />
           </div>
           <div className="mt-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -1570,15 +1621,19 @@ function ReportingView({
             <div className="grid gap-2 md:grid-cols-[180px_320px]">
               <Select
                 value={actionFilter}
-                onValueChange={(value) =>
-                  value && setActionFilter(value as ReportActionFilter)
-                }
+                onValueChange={(value) => {
+                  if (!value) return;
+                  setReportPage(1);
+                  setActionFilter(value as ReportActionFilter);
+                }}
               >
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
                   <SelectItem value="sent">Sent</SelectItem>
+                  <SelectItem value="failed">Failed</SelectItem>
                   <SelectItem value="read">Read</SelectItem>
                   <SelectItem value="clicked">Clicked</SelectItem>
                   <SelectItem value="replied">Replied</SelectItem>
@@ -1591,53 +1646,112 @@ function ReportingView({
                 <Input
                   className="pl-9"
                   value={reportSearch}
-                  onChange={(event) => setReportSearch(event.target.value)}
-                  placeholder="Search filtered leads"
+                  onChange={(event) => {
+                    setReportPage(1);
+                    setReportSearch(event.target.value);
+                  }}
+                  placeholder="Search leads, replies, errors"
                 />
               </div>
             </div>
           </div>
-          {loadingBatchLeads ? (
+          {loadingReport ? (
             <div className="mt-3 rounded-lg bg-muted p-5 text-sm">
-              Loading sent leads.
+              Loading report.
             </div>
-          ) : searchableBatchLeads.length ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Lead</TableHead>
-                  <TableHead>Location</TableHead>
-                  <TableHead>Course</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Converted</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {searchableBatchLeads.map((lead) => (
-                  <TableRow key={lead.id}>
-                    <TableCell>
-                      <div className="font-medium">{lead.name}</div>
-                      <div className="text-sm text-muted-foreground">
-                        {lead.phone}
-                      </div>
-                    </TableCell>
-                    <TableCell>{lead.city}</TableCell>
-                    <TableCell>{lead.company}</TableCell>
-                    <TableCell>{actionLabel(actionFilter)}</TableCell>
-                    <TableCell>
-                      <label className="inline-flex cursor-pointer items-center gap-2">
-                        <input
-                          checked={convertedLeadIds.includes(lead.id)}
-                          onChange={() => toggleConverted(lead.id)}
-                          type="checkbox"
-                        />
-                        <span className="text-sm">Mark converted</span>
-                      </label>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          ) : reportRows.length ? (
+            <>
+              <div className="mt-4 overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Lead</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Read</TableHead>
+                      <TableHead>Clicked</TableHead>
+                      <TableHead>Reply</TableHead>
+                      <TableHead>Meta error</TableHead>
+                      <TableHead>Converted</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {reportRows.map((row) => (
+                      <TableRow key={row.lead.id}>
+                        <TableCell>
+                          <div className="font-medium">{row.lead.name}</div>
+                          <div className="text-sm text-muted-foreground">
+                            {row.lead.phone}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {row.lead.city} - {row.lead.company}
+                          </div>
+                        </TableCell>
+                        <TableCell>{reportStatusLabel(row)}</TableCell>
+                        <TableCell>{row.read ? 'Yes' : 'No'}</TableCell>
+                        <TableCell>{row.clicked ? 'Yes' : 'No'}</TableCell>
+                        <TableCell className="max-w-sm">
+                          {row.replies.length ? (
+                            <div className="space-y-1">
+                              {row.replies.map((reply, index) => (
+                                <p key={`${row.lead.id}-${index}`} className="text-sm">
+                                  {reply.text || reply.type}
+                                </p>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">No reply</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="max-w-sm text-sm text-muted-foreground">
+                          {row.error || '-'}
+                        </TableCell>
+                        <TableCell>
+                          <label className="inline-flex cursor-pointer items-center gap-2">
+                            <input
+                              checked={row.converted}
+                              onChange={() => void toggleConverted(row.lead.id)}
+                              type="checkbox"
+                            />
+                            <span className="text-sm">Mark converted</span>
+                          </label>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="mt-4 flex flex-col gap-2 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
+                <span>
+                  Page {Number(reportData?.page || 1).toLocaleString()} of{' '}
+                  {Number(reportData?.totalPages || 1).toLocaleString()} -{' '}
+                  {Number(reportData?.totalRows || 0).toLocaleString()} rows
+                </span>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={reportPage <= 1}
+                    onClick={() => setReportPage((page) => Math.max(page - 1, 1))}
+                  >
+                    <ChevronLeft className="size-4" />
+                    Page {Math.max(reportPage - 1, 1)}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={reportPage >= Number(reportData?.totalPages || 1)}
+                    onClick={() =>
+                      setReportPage((page) =>
+                        Math.min(page + 1, Number(reportData?.totalPages || 1)),
+                      )
+                    }
+                  >
+                    Page {Math.min(reportPage + 1, Number(reportData?.totalPages || 1))}
+                    <ChevronRight className="size-4" />
+                  </Button>
+                </div>
+              </div>
+            </>
           ) : (
             <div className="mt-3 rounded-lg border border-dashed border-border bg-background p-5 text-sm text-muted-foreground">
               No leads found for this action filter and search.
@@ -1998,7 +2112,9 @@ function filterLeadsByAction(
   const repliedIds = batch.repliedLeadIds || [];
   const convertedIds = batch.convertedLeadIds || [];
   const actionSets: Record<ReportActionFilter, Set<string>> = {
+    all: new Set(batch.leadIds),
     sent: new Set(batch.leadIds),
+    failed: new Set(batch.failedLeadIds || []),
     read: new Set(readIds),
     clicked: new Set(clickedIds),
     replied: new Set(repliedIds),
@@ -2013,7 +2129,9 @@ function filterLeadsByAction(
 
 function actionLabel(action: ReportActionFilter) {
   const labels: Record<ReportActionFilter, string> = {
+    all: 'All',
     sent: 'Message sent',
+    failed: 'Failed',
     read: 'Read',
     clicked: 'Clicked',
     replied: 'Replied',
@@ -2021,6 +2139,16 @@ function actionLabel(action: ReportActionFilter) {
     'not-opened': 'Not opened',
   };
   return labels[action];
+}
+
+function reportStatusLabel(row: ReportLeadRow) {
+  if (row.error || row.messageStatus === 'failed') return 'Failed';
+  if (row.converted) return 'Converted';
+  if (row.replied) return 'Replied';
+  if (row.clicked) return 'Clicked';
+  if (row.read) return 'Read';
+  if (row.messageStatus === 'sent') return 'Message sent';
+  return row.messageStatus.replace(/_/g, ' ');
 }
 
 function toCsv(rows: Record<string, string>[]) {
