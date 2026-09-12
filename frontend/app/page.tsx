@@ -455,6 +455,7 @@ export default function Home() {
 
   const pageTitle =
     navItems.find((item) => item.id === activeView)?.label || 'Dashboard';
+  const isReportTab = Boolean(initialReportId);
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -545,6 +546,7 @@ export default function Home() {
               leads={archive.leads}
               templates={[...metaTemplates, ...templates]}
               selectedReportId={selectedReportId}
+              showReportDetail={isReportTab}
               setBatches={setBatches}
               setSelectedReportId={setSelectedReportId}
               setNotice={setNotice}
@@ -1134,7 +1136,6 @@ function ReachOutView({
       return;
     }
     setBatches((current) => [data.batch as BatchRecord, ...current]);
-    setSelectedReportId(data.batch.id);
     setBatchName('');
     setSelectedLeadIds([]);
     setActiveView('reporting');
@@ -1371,6 +1372,7 @@ function ReportingView({
   leads,
   templates,
   selectedReportId,
+  showReportDetail,
   setBatches,
   setSelectedReportId,
   setNotice,
@@ -1379,6 +1381,7 @@ function ReportingView({
   leads: ArchiveLead[];
   templates: TemplateRecord[];
   selectedReportId: string;
+  showReportDetail: boolean;
   setBatches: (updater: (batches: BatchRecord[]) => BatchRecord[]) => void;
   setSelectedReportId: (id: string) => void;
   setNotice: (notice: string) => void;
@@ -1398,7 +1401,7 @@ function ReportingView({
   useEffect(() => {
     let cancelled = false;
     async function loadReport() {
-      if (!selectedReportId) {
+      if (!showReportDetail || !selectedReportId) {
         setReportData(null);
         return;
       }
@@ -1436,7 +1439,14 @@ function ReportingView({
     return () => {
       cancelled = true;
     };
-  }, [actionFilter, reportPage, reportSearch, selectedReportId, setNotice]);
+  }, [
+    actionFilter,
+    reportPage,
+    reportSearch,
+    selectedReportId,
+    setNotice,
+    showReportDetail,
+  ]);
 
   async function toggleConverted(leadId: string) {
     if (!reportBatch) return;
@@ -1631,7 +1641,7 @@ function ReportingView({
         )}
       </section>
 
-      {selectedReportId && reportBatch && (
+      {showReportDetail && selectedReportId && reportBatch && (
         <section className="rounded-lg border border-border bg-card p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
