@@ -3,43 +3,38 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 import { isAuthenticated, unauthorizedResponse } from '@/lib/auth';
-import { toBatchRecord } from '@/lib/batches';
 import { getWnsClient, getWnsDbName } from '@/lib/lead-sync';
 
 type Params = {
   params: Promise<{ batchId: string }>;
 };
 
-export async function POST(request: NextRequest, { params }: Params) {
+export async function DELETE(request: NextRequest, { params }: Params) {
   try {
     if (!isAuthenticated(request)) {
       return unauthorizedResponse();
     }
 
     const { batchId } = await params;
-    const body = (await request.json()) as {
-      leadId?: string;
-      converted?: boolean;
-    };
-    if (!ObjectId.isValid(batchId) || !body.leadId) {
+    if (!ObjectId.isValid(batchId)) {
       return NextResponse.json(
-        { status: 'error', message: 'Batch and lead are required.' },
+        { status: 'error', message: 'Invalid batch id.' },
         { status: 400 },
       );
     }
 
     const client = await getWnsClient();
-    const collection = client.db(getWnsDbName()).collection('whatsappBatches');
-    const update =
-      body.converted === false
-        ? { $pull: { convertedLeadIds: body.leadId } }
-        : { $addToSet: { convertedLeadIds: body.leadId } };
+    const db = client.db(getWnsDbName());
+    const batchObjectId = new ObjectId(batchId);
+    const deletedAt = new Date();
 
-    const result = await collection.findOneAndUpdate(
-      { _id: new ObjectId(batchId), deletedAt: { $exists: false } },
+    const result = await db.collection('whatsappBatches').findOneAndUpdate(
+      { _id: batchObjectId, deletedAt: { $exists: false } },
       {
-        ...update,
-        $set: { updatedAt: new Date() },
+        $set: {
+          deletedAt,
+          updatedAt: deletedAt,
+        },
       },
       { returnDocument: 'after' },
     );
@@ -51,18 +46,26 @@ export async function POST(request: NextRequest, { params }: Params) {
       );
     }
 
+    await db.collection('whatsappMessages').updateMany(
+      { batchId: batchObjectId, deletedAt: { $exists: false } },
+      {
+        $set: {
+          deletedAt,
+          updatedAt: deletedAt,
+        },
+      },
+    );
+
     return NextResponse.json({
-      status: 'updated',
-      batch: toBatchRecord(result),
+      status: 'deleted',
+      batchId,
     });
   } catch (error) {
     return NextResponse.json(
       {
         status: 'error',
         message:
-          error instanceof Error
-            ? error.message
-            : 'Unable to update conversion.',
+          error instanceof Error ? error.message : 'Unable to delete report.',
       },
       { status: 500 },
     );

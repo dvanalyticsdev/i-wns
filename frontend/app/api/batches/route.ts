@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
     const docs = await client
       .db(getWnsDbName())
       .collection('whatsappBatches')
-      .find({})
+      .find({ deletedAt: { $exists: false } })
       .sort({ createdAt: -1 })
       .limit(100)
       .toArray();

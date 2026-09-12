@@ -41,7 +41,7 @@ export async function GET(request: NextRequest, { params }: Params) {
     const db = client.db(getWnsDbName());
     const batchDoc = await db
       .collection('whatsappBatches')
-      .findOne({ _id: new ObjectId(batchId) });
+      .findOne({ _id: new ObjectId(batchId), deletedAt: { $exists: false } });
 
     if (!batchDoc) {
       return NextResponse.json(
@@ -53,7 +53,7 @@ export async function GET(request: NextRequest, { params }: Params) {
     const batch = toBatchRecord(batchDoc);
     const messages = await db
       .collection('whatsappMessages')
-      .find({ batchId: batchDoc._id })
+      .find({ batchId: batchDoc._id, deletedAt: { $exists: false } })
       .sort({ createdAt: -1 })
       .toArray();
     const messageByLead = new Map(

@@ -20,6 +20,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Trash2,
   Upload,
   Users,
   type LucideIcon,
@@ -1492,6 +1493,37 @@ function ReportingView({
     }
   }
 
+  async function deleteReport(batch: BatchRecord) {
+    const confirmed = window.confirm(
+      `Delete the "${batch.name}" report? Its leads will become selectable again and it will stop counting as reached.`,
+    );
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`/api/batches/${batch.id}`, {
+        method: 'DELETE',
+      });
+      const data = (await response.json()) as { message?: string };
+      if (!response.ok) {
+        throw new Error(data.message || 'Unable to delete report.');
+      }
+      setBatches((current) =>
+        current.filter((currentBatch) => currentBatch.id !== batch.id),
+      );
+      if (selectedReportId === batch.id) {
+        setSelectedReportId('');
+        setReportData(null);
+      }
+      setNotice(
+        `Deleted ${batch.name}. Those leads are now available for future batches.`,
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : 'Unable to delete report.',
+      );
+    }
+  }
+
   function exportFilteredLeads() {
     if (!reportBatch) return;
     const rows = reportRows.map((row) => ({
@@ -1563,19 +1595,28 @@ function ReportingView({
                   <TableCell>{batch.replies}</TableCell>
                   <TableCell>{(batch.convertedLeadIds || []).length}</TableCell>
                   <TableCell>
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        window.open(
-                          `/?report=${batch.id}`,
-                          '_blank',
-                          'noopener,noreferrer',
-                        );
-                      }}
-                    >
-                      <Eye className="size-4" />
-                      View report
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          window.open(
+                            `/?report=${batch.id}`,
+                            '_blank',
+                            'noopener,noreferrer',
+                          );
+                        }}
+                      >
+                        <Eye className="size-4" />
+                        View report
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => void deleteReport(batch)}
+                      >
+                        <Trash2 className="size-4" />
+                        Delete
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

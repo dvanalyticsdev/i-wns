@@ -128,7 +128,7 @@ async function applyStatuses(statuses: WhatsAppStatus[], receivedAt: Date) {
     if (!wamid) continue;
 
     const message = await messages.findOneAndUpdate(
-      { wamid },
+      { wamid, deletedAt: { $exists: false } },
       {
         $set: {
           status: statusEvent.status || 'unknown',
@@ -157,7 +157,10 @@ async function applyStatuses(statuses: WhatsAppStatus[], receivedAt: Date) {
 
     if (Object.keys(addToSet).length) {
       await batches.updateOne(
-        { _id: new ObjectId(String(message.batchId)) },
+        {
+          _id: new ObjectId(String(message.batchId)),
+          deletedAt: { $exists: false },
+        },
         {
           $addToSet: addToSet,
           $set: { updatedAt: receivedAt },
@@ -203,12 +206,15 @@ async function applyReplies(messages: WhatsAppInboundMessage[], receivedAt: Date
 
     if (lead?.crmLeadId) {
       const latestMessage = await db.collection('whatsappMessages').findOne(
-        { leadId: lead.crmLeadId },
+        { leadId: lead.crmLeadId, deletedAt: { $exists: false } },
         { sort: { createdAt: -1 } },
       );
       if (latestMessage?.batchId) {
         await batches.updateOne(
-          { _id: new ObjectId(String(latestMessage.batchId)) },
+          {
+            _id: new ObjectId(String(latestMessage.batchId)),
+            deletedAt: { $exists: false },
+          },
           {
             $addToSet: { repliedLeadIds: lead.crmLeadId },
             $set: { updatedAt: receivedAt },
