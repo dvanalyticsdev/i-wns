@@ -158,6 +158,21 @@ type ReportActionFilter =
   | 'converted'
   | 'not-opened';
 
+type TimelinePreset =
+  | 'today'
+  | 'yesterday'
+  | 'this-week'
+  | 'this-month'
+  | 'last-month'
+  | 'this-year'
+  | 'custom';
+
+type TimelineFilterState = {
+  preset: TimelinePreset;
+  customFrom: string;
+  customTo: string;
+};
+
 type ReportLeadRow = {
   lead: ArchiveLead;
   messageStatus: string;
@@ -650,22 +665,36 @@ function DashboardView({
   batches,
   templates,
 }: {
+  archive: ArchiveResponse;
   batches: BatchRecord[];
   templates: TemplateRecord[];
 }) {
-  const totalSent = batches.reduce((sum, batch) => sum + batch.sent, 0);
-  const totalRead = batches.reduce((sum, batch) => sum + batch.read, 0);
-  const totalReplies = batches.reduce((sum, batch) => sum + batch.replies, 0);
-  const converted = batches.reduce(
+  const [timeline, setTimeline] = useState<TimelineFilterState>({
+    preset: 'this-month',
+    customFrom: '',
+    customTo: '',
+  });
+  const [templateFilter, setTemplateFilter] = useState('all');
+  const timelineBatches = filterBatchesByTimeline(batches, timeline);
+  const totalSent = timelineBatches.reduce((sum, batch) => sum + batch.sent, 0);
+  const totalRead = timelineBatches.reduce((sum, batch) => sum + batch.read, 0);
+  const totalReplies = timelineBatches.reduce((sum, batch) => sum + batch.replies, 0);
+  const converted = timelineBatches.reduce(
     (sum, batch) => sum + (batch.convertedLeadIds || []).length,
     0,
   );
-  const [templateFilter, setTemplateFilter] = useState('all');
-  const trend = buildTrendData(batches, templateFilter);
+  const totalSpend = calculateSpend(timelineBatches, templates);
+  const costPerAdmission = converted ? totalSpend / converted : null;
+  const trend = buildTrendData(timelineBatches, templateFilter);
 
   return (
     <div className="space-y-4 px-4 py-5 md:px-6">
-      <section className="grid gap-3 md:grid-cols-4">
+      <TimelineFilter
+        value={timeline}
+        onChange={setTimeline}
+        resultCount={timelineBatches.length}
+      />
+      <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
         <Metric
           icon={Send}
           label="Total messages sent"
@@ -685,6 +714,16 @@ function DashboardView({
           icon={Check}
           label="Converted"
           value={converted.toLocaleString()}
+        />
+        <Metric
+          icon={FileSpreadsheet}
+          label="Total spending"
+          value={formatInr(totalSpend)}
+        />
+        <Metric
+          icon={BarChart3}
+          label="Per admission cost"
+          value={costPerAdmission === null ? '-' : formatInr(costPerAdmission)}
         />
       </section>
 
@@ -1374,6 +1413,12 @@ function ReportingView({
   setNotice: (notice: string) => void;
 }) {
   const selectedBatch = batches.find((batch) => batch.id === selectedReportId);
+  const [timeline, setTimeline] = useState<TimelineFilterState>({
+    preset: 'this-month',
+    customFrom: '',
+    customTo: '',
+  });
+  const filteredBatches = filterBatchesByTimeline(batches, timeline);
   const [reportSearch, setReportSearch] = useState('');
   const [actionFilter, setActionFilter] = useState<ReportActionFilter>('all');
   const [reportPage, setReportPage] = useState(1);
@@ -1617,6 +1662,11 @@ function ReportingView({
 
   return (
     <div className="space-y-4 px-4 py-5 md:px-6">
+      <TimelineFilter
+        value={timeline}
+        onChange={setTimeline}
+        resultCount={filteredBatches.length}
+      />
       <section className="rounded-lg border border-border bg-card">
         <div className="border-b border-border p-4">
           <h2 className="text-lg font-semibold">Batch reports</h2>
@@ -1624,7 +1674,7 @@ function ReportingView({
             Open a batch report to review performance and export good leads.
           </p>
         </div>
-        {batches.length ? (
+        {filteredBatches.length ? (
           <Table>
             <TableHeader>
               <TableRow>
@@ -1640,7 +1690,7 @@ function ReportingView({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {batches.map((batch) => (
+              {filteredBatches.map((batch) => (
                 <TableRow key={batch.id}>
                   <TableCell>
                     <div className="font-medium">{batch.name}</div>
@@ -1688,8 +1738,12 @@ function ReportingView({
         ) : (
           <EmptyState
             icon={BarChart3}
-            title="No reports yet"
-            text="Reports will appear after you send the first batch."
+            title={batches.length ? 'No reports in this timeline' : 'No reports yet'}
+            text={
+              batches.length
+                ? 'Choose another timeline to see older or newer reports.'
+                : 'Reports will appear after you send the first batch.'
+            }
           />
         )}
       </section>
@@ -2162,6 +2216,70 @@ function MiniMetric({ label, value }: { label: string; value: number | string })
   );
 }
 
+function TimelineFilter({
+  value,
+  onChange,
+  resultCount,
+}: {
+  value: TimelineFilterState;
+  onChange: (value: TimelineFilterState) => void;
+  resultCount: number;
+}) {
+  return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h2 className="text-base font-semibold">Timeline</h2>
+          <p className="text-sm text-muted-foreground">
+            {resultCount.toLocaleString()} batches in selected range.
+          </p>
+        </div>
+        <div className="grid gap-2 md:grid-cols-[220px_160px_160px]">
+          <Select
+            value={value.preset}
+            onValueChange={(preset) =>
+              onChange({ ...value, preset: preset as TimelinePreset })
+            }
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="today">Today</SelectItem>
+              <SelectItem value="yesterday">Yesterday</SelectItem>
+              <SelectItem value="this-week">This week</SelectItem>
+              <SelectItem value="this-month">This month</SelectItem>
+              <SelectItem value="last-month">Last month</SelectItem>
+              <SelectItem value="this-year">This year</SelectItem>
+              <SelectItem value="custom">Custom</SelectItem>
+            </SelectContent>
+          </Select>
+          {value.preset === 'custom' && (
+            <>
+              <Input
+                type="date"
+                value={value.customFrom}
+                onChange={(event) =>
+                  onChange({ ...value, customFrom: event.target.value })
+                }
+                aria-label="Timeline start date"
+              />
+              <Input
+                type="date"
+                value={value.customTo}
+                onChange={(event) =>
+                  onChange({ ...value, customTo: event.target.value })
+                }
+                aria-label="Timeline end date"
+              />
+            </>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ControlRow({
   label,
   description,
@@ -2225,6 +2343,13 @@ function templateName(templates: TemplateRecord[], id: string) {
   return templates.find((template) => template.id === id)?.name || '-';
 }
 
+function calculateSpend(batches: BatchRecord[], templates: TemplateRecord[]) {
+  return batches.reduce((sum, batch) => {
+    if (!isMarketingTemplate(batch, templates)) return sum;
+    return sum + (batch.deliveredLeadIds?.length || batch.delivered || 0) * MARKETING_DELIVERY_COST_INR;
+  }, 0);
+}
+
 function isMarketingTemplate(batch: BatchRecord, templates: TemplateRecord[]) {
   if (batch.templateCategory?.toUpperCase() === 'MARKETING') {
     return true;
@@ -2244,6 +2369,80 @@ function formatInr(value: number) {
     currency: 'INR',
     maximumFractionDigits: 2,
   }).format(value);
+}
+
+function filterBatchesByTimeline(
+  batches: BatchRecord[],
+  timeline: TimelineFilterState,
+) {
+  const range = getTimelineRange(timeline);
+  if (!range) return batches;
+  return batches.filter((batch) => {
+    const date = getBatchDate(batch);
+    return date ? date >= range.start && date < range.end : false;
+  });
+}
+
+function getTimelineRange(timeline: TimelineFilterState) {
+  const now = new Date();
+  const today = startOfDay(now);
+  if (timeline.preset === 'today') {
+    return { start: today, end: addDays(today, 1) };
+  }
+  if (timeline.preset === 'yesterday') {
+    return { start: addDays(today, -1), end: today };
+  }
+  if (timeline.preset === 'this-week') {
+    return { start: startOfWeek(today), end: addDays(today, 1) };
+  }
+  if (timeline.preset === 'this-month') {
+    return {
+      start: new Date(today.getFullYear(), today.getMonth(), 1),
+      end: addDays(today, 1),
+    };
+  }
+  if (timeline.preset === 'last-month') {
+    return {
+      start: new Date(today.getFullYear(), today.getMonth() - 1, 1),
+      end: new Date(today.getFullYear(), today.getMonth(), 1),
+    };
+  }
+  if (timeline.preset === 'this-year') {
+    return {
+      start: new Date(today.getFullYear(), 0, 1),
+      end: addDays(today, 1),
+    };
+  }
+
+  const start = timeline.customFrom
+    ? startOfDay(new Date(`${timeline.customFrom}T00:00:00`))
+    : new Date(0);
+  const end = timeline.customTo
+    ? addDays(startOfDay(new Date(`${timeline.customTo}T00:00:00`)), 1)
+    : addDays(today, 1);
+  return { start, end };
+}
+
+function getBatchDate(batch: BatchRecord) {
+  const value = batch.createdAtIso || batch.createdAt;
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function startOfWeek(date: Date) {
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  return addDays(startOfDay(date), diff);
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }
 
 function filterLeadsByAction(

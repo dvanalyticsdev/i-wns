@@ -23,6 +23,7 @@ export type BatchRecord = {
   converted: number;
   shared: number;
   createdAt: string;
+  createdAtIso: string;
   status: 'Draft' | 'Sent' | 'Failed' | 'Sending';
 };
 
@@ -58,6 +59,7 @@ export function toBatchRecord(doc: WithId<Document>): BatchRecord {
     converted: convertedLeadIds.length,
     shared: sharedLeadIds.length,
     createdAt: formatDate(doc.createdAt),
+    createdAtIso: formatIsoDate(doc.createdAt),
     status: mapStatus(String(doc.status || 'Draft')),
   };
 }
@@ -72,6 +74,14 @@ function formatDate(value: unknown) {
     return '';
   }
   return date.toLocaleString('en-IN');
+}
+
+function formatIsoDate(value: unknown) {
+  const date = value instanceof Date ? value : new Date(String(value || ''));
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  return date.toISOString();
 }
 
 function mapStatus(status: string): BatchRecord['status'] {
