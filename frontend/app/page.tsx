@@ -15,7 +15,6 @@ import {
   Lock,
   MessageCircle,
   Paperclip,
-  Plus,
   RefreshCw,
   Search,
   Send,
@@ -241,9 +240,6 @@ export default function Home() {
     status: 'loading',
   });
   const [, setNotice] = useState('Loading CRM archive.');
-  const [templates, setTemplates] = useState<TemplateRecord[]>(() =>
-    readStoredRecords<TemplateRecord>(storageKeys.templates),
-  );
   const [metaTemplates, setMetaTemplates] = useState<TemplateRecord[]>([]);
   const [batches, setBatches] = useState<BatchRecord[]>(() =>
     readStoredRecords<BatchRecord>(storageKeys.batches),
@@ -272,15 +268,6 @@ export default function Home() {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(
-        storageKeys.templates,
-        JSON.stringify(templates),
-      );
-    }
-  }, [templates]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -528,14 +515,12 @@ export default function Home() {
             <DashboardView
               archive={archive}
               batches={batches}
-              templates={templates}
+              templates={metaTemplates}
             />
           )}
           {activeView === 'templates' && (
             <TemplatesView
-              templates={templates}
               metaTemplates={metaTemplates}
-              setTemplates={setTemplates}
               setMetaTemplates={setMetaTemplates}
               setNotice={setNotice}
             />
@@ -555,7 +540,7 @@ export default function Home() {
             <ReportingView
               batches={batches}
               leads={archive.leads}
-              templates={[...metaTemplates, ...templates]}
+              templates={metaTemplates}
               selectedReportId={selectedReportId}
               showReportDetail={isReportTab}
               setBatches={setBatches}
@@ -775,48 +760,15 @@ function DashboardView({
 }
 
 function TemplatesView({
-  templates,
   metaTemplates,
-  setTemplates,
   setMetaTemplates,
   setNotice,
 }: {
-  templates: TemplateRecord[];
   metaTemplates: TemplateRecord[];
-  setTemplates: (
-    updater: (templates: TemplateRecord[]) => TemplateRecord[],
-  ) => void;
   setMetaTemplates: (templates: TemplateRecord[]) => void;
   setNotice: (notice: string) => void;
 }) {
-  const [name, setName] = useState('');
-  const [category, setCategory] = useState('Marketing');
-  const [body, setBody] = useState('');
-  const [mediaName, setMediaName] = useState('');
   const [syncingTemplates, setSyncingTemplates] = useState(false);
-
-  function addTemplate() {
-    if (!name.trim() || !body.trim()) {
-      setNotice('Template name and message are required.');
-      return;
-    }
-    const template: TemplateRecord = {
-      id: crypto.randomUUID(),
-      name: name.trim(),
-      category,
-      body: body.trim(),
-      mediaName,
-      status: 'Draft',
-      source: 'draft',
-    };
-    setTemplates((current) => [template, ...current]);
-    setName('');
-    setBody('');
-    setMediaName('');
-    setNotice(
-      'Draft template added in i-wns. Submit the same template in Meta before sending.',
-    );
-  }
 
   async function syncMetaTemplates() {
     setSyncingTemplates(true);
@@ -855,123 +807,41 @@ function TemplatesView({
   }
 
   return (
-    <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-[minmax(0,1fr)_430px]">
-      <div className="space-y-4">
-        <section className="rounded-lg border border-border bg-card">
-          <div className="flex flex-col gap-3 border-b border-border p-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <h2 className="text-lg font-semibold">Meta approved templates</h2>
-              <p className="text-sm text-muted-foreground">
-                Only Active Meta templates can be selected for WhatsApp sending.
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              disabled={syncingTemplates}
-              onClick={() => void syncMetaTemplates()}
-            >
-              <RefreshCw className="size-4" />
-              {syncingTemplates ? 'Syncing' : 'Sync Meta'}
-            </Button>
-          </div>
-          {metaTemplates.length ? (
-            <div className="grid gap-3 p-4">
-              {metaTemplates.map((template) => (
-                <TemplateCard
-                  key={template.id}
-                  template={template}
-                  sendReady={isApprovedMetaTemplate(template)}
-                />
-              ))}
-            </div>
-          ) : (
-            <EmptyState
-              icon={ClipboardList}
-              title="No Meta templates synced"
-              text="Click Sync Meta after creating or approving templates in WhatsApp Manager."
-            />
-          )}
-        </section>
-
-        <section className="rounded-lg border border-border bg-card">
-          <div className="border-b border-border p-4">
-            <h2 className="text-lg font-semibold">Draft templates</h2>
+    <div className="px-4 py-5 md:px-6">
+      <section className="rounded-lg border border-border bg-card">
+        <div className="flex flex-col gap-3 border-b border-border p-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Meta approved templates</h2>
             <p className="text-sm text-muted-foreground">
-              Drafts are for planning copy in i-wns only. Create and approve the
-              same template in Meta before it can be sent.
+              Only Active Meta templates can be selected for WhatsApp sending.
             </p>
           </div>
-          {templates.length ? (
+          <Button
+            variant="outline"
+            disabled={syncingTemplates}
+            onClick={() => void syncMetaTemplates()}
+          >
+            <RefreshCw className="size-4" />
+            {syncingTemplates ? 'Syncing' : 'Sync Meta'}
+          </Button>
+        </div>
+        {metaTemplates.length ? (
           <div className="grid gap-3 p-4">
-            {templates.map((template) => (
+            {metaTemplates.map((template) => (
               <TemplateCard
                 key={template.id}
                 template={template}
-                sendReady={false}
+                sendReady={isApprovedMetaTemplate(template)}
               />
             ))}
           </div>
         ) : (
           <EmptyState
             icon={ClipboardList}
-            title="No draft templates"
-            text="Use drafts to prepare copy before submitting it in Meta."
+            title="No Meta templates synced"
+            text="Click Sync Meta after creating or approving templates in WhatsApp Manager."
           />
         )}
-      </section>
-      </div>
-
-      <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-lg font-semibold">Add draft template</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          This does not submit to Meta. It is for planning and maintaining copy
-          in i-wns.
-        </p>
-        <div className="mt-4 space-y-3">
-          <Input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Template name"
-          />
-          <Select
-            value={category}
-            onValueChange={(value) => value && setCategory(value)}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="Marketing">Marketing</SelectItem>
-              <SelectItem value="Utility">Utility</SelectItem>
-              <SelectItem value="Authentication">Authentication</SelectItem>
-            </SelectContent>
-          </Select>
-          <textarea
-            className="min-h-36 w-full rounded-lg border border-input bg-background p-3 text-sm outline-none focus:ring-3 focus:ring-ring/25"
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
-            placeholder="Message body"
-          />
-          <label className="flex cursor-pointer items-center justify-between rounded-lg border border-input bg-background px-3 py-2 text-sm">
-            <span className="truncate">{mediaName || 'Attach media file'}</span>
-            <Upload className="size-4 text-muted-foreground" />
-            <input
-              className="sr-only"
-              type="file"
-              onChange={(event) =>
-                setMediaName(event.target.files?.[0]?.name || '')
-              }
-            />
-          </label>
-          <Button className="w-full" onClick={addTemplate}>
-            <Plus className="size-4" />
-            Add draft
-          </Button>
-          <div className="rounded-lg bg-muted p-3 text-xs text-muted-foreground">
-            For sending, create/approve the template in Meta, then click Sync
-            Meta. Reach Out will only show active Meta templates.
-          </div>
-        </div>
       </section>
     </div>
   );
@@ -1002,7 +872,7 @@ function TemplateCard({
             </Badge>
           )}
           <Badge variant={sendReady ? 'default' : 'outline'}>
-            {sendReady ? 'Ready to send' : template.status || 'Draft only'}
+            {sendReady ? 'Ready to send' : template.status || 'Not active'}
           </Badge>
         </div>
       </div>
@@ -1011,9 +881,7 @@ function TemplateCard({
       </p>
       {!sendReady && (
         <p className="mt-3 rounded-lg bg-muted p-3 text-xs text-muted-foreground">
-          {template.source === 'meta'
-            ? 'This Meta template is not active yet, so it cannot be used in Reach Out.'
-            : 'Draft only. Create and approve the same template in Meta, then sync it here.'}
+          This Meta template is not active yet, so it cannot be used in Reach Out.
         </p>
       )}
     </article>
