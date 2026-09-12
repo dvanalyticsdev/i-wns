@@ -27,6 +27,27 @@ const KNOWN_COURSE_OPTIONS = WNS_COURSE_OPTIONS.filter(
   (course) => course !== 'Others',
 );
 
+const LOCATION_ALIASES: Array<[string, string[]]> = [
+  ['Ahmedabad', ['ahmedabad']],
+  ['Bangalore', ['bangalore', 'bengaluru', 'banglore']],
+  ['Bhubaneswar', ['bhubaneswar', 'bbsr']],
+  ['Chandigarh', ['chandigarh']],
+  ['Chennai', ['chennai', 'madras']],
+  ['Cuttack', ['cuttack']],
+  ['Delhi', ['delhi', 'new delhi', 'ncr']],
+  ['Gurgaon', ['gurgaon', 'gurugram']],
+  ['Hyderabad', ['hyderabad']],
+  ['Jaipur', ['jaipur']],
+  ['Kolkata', ['kolkata', 'calcutta']],
+  ['Mumbai', ['mumbai', 'bombay']],
+  ['Noida', ['noida']],
+  ['Patna', ['patna']],
+  ['Pune', ['pune']],
+];
+
+const INVALID_LOCATION_PATTERN =
+  /[_;'"`]|(?:^|\s)(?:yes|no|na|n\/a|nil|null|none|unknown|test|interested|programming|workshop|course|sql|sas)(?:\s|$)/i;
+
 let crmClient: MongoClient | null = null;
 let wnsClient: MongoClient | null = null;
 
@@ -161,7 +182,12 @@ export function buildWnsFilter({
     courses?.length ? courses : course ? [course] : [],
   );
   if (cityValues.length) {
-    filter.city = { $in: cityValues };
+    const clauses = cityValues.map((location) =>
+      location === 'Others'
+        ? invalidLocationFilter()
+        : { city: locationRegex(location) },
+    );
+    filter.$and = [...(filter.$and || []), { $or: clauses }];
   }
   if (courseValues.length) {
     const includeOthers = courseValues.includes('Others');
@@ -272,6 +298,75 @@ export function toBulkOperation(
       upsert: true,
     },
   };
+}
+
+export function cleanLocationOptions(values: unknown[]) {
+  const options = new Set<string>();
+  let hasOthers = false;
+  for (const value of values) {
+    const normalized = normalizeLocationOption(value);
+    if (normalized) {
+      options.add(normalized);
+    } else {
+      hasOthers = true;
+    }
+  }
+  return [
+    ...Array.from(options).sort((a, b) => a.localeCompare(b)),
+    ...(hasOthers ? ['Others'] : []),
+  ];
+}
+
+function normalizeLocationOption(value: unknown) {
+  if (typeof value !== 'string') return '';
+  const raw = value.trim();
+  if (!raw || raw === '-' || INVALID_LOCATION_PATTERN.test(raw)) return '';
+  const compact = raw
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z\s,()/-]/g, ' ')
+    .replace(/\b(?:india|bharat|state|dist|district|city|rajasthan|odisha|orissa|maharashtra|karnataka|tamil nadu|telangana|bihar|uttar pradesh|up|haryana|punjab|gujarat|west bengal|wb)\b/g, ' ')
+    .replace(/[/,()_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!compact || compact.length < 2 || compact.length > 40) return '';
+  if (!/[aeiou]/.test(compact)) return '';
+
+  for (const [city, aliases] of LOCATION_ALIASES) {
+    if (aliases.some((alias) => matchesLocationTerm(compact, alias))) {
+      return city;
+    }
+  }
+
+  const words = compact.split(' ').filter(Boolean);
+  if (!words.length || words.length > 3) return '';
+  return words.map(titleCase).join(' ');
+}
+
+function matchesLocationTerm(value: string, term: string) {
+  return new RegExp(`(^|\\s)${escapeRegex(term)}(\\s|$)`, 'i').test(value);
+}
+
+function locationRegex(location: string) {
+  const aliases =
+    LOCATION_ALIASES.find(([city]) => city === location)?.[1] || [location];
+  return new RegExp(aliases.map(escapeRegex).join('|'), 'i');
+}
+
+function invalidLocationFilter() {
+  return {
+    $or: [
+      { city: { $exists: false } },
+      { city: '' },
+      { city: '-' },
+      { city: { $not: /[A-Za-z]/ } },
+      { city: INVALID_LOCATION_PATTERN },
+    ],
+  };
+}
+
+function titleCase(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function pickText(doc: Document, keys: string[]) {

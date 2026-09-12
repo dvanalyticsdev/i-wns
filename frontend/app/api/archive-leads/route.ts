@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server';
 import { isAuthenticated, unauthorizedResponse } from '@/lib/auth';
 import {
   buildWnsFilter,
+  cleanLocationOptions,
   getLeadCollectionName,
   getWnsClient,
   getWnsDbName,
@@ -64,7 +65,7 @@ export async function GET(request: NextRequest) {
       limit,
       totalPages: Math.max(Math.ceil(filteredCount / limit), 1),
       leads: docs.map(toArchiveLead),
-      cities: cleanFacetValues(cityFacets),
+      cities: cleanLocationOptions(cityFacets),
       courses: WNS_COURSE_OPTIONS,
       collection: getLeadCollectionName(),
       database: getWnsDbName(),
@@ -92,14 +93,6 @@ export async function GET(request: NextRequest) {
       { status: 500 },
     );
   }
-}
-
-function cleanFacetValues(values: unknown[]) {
-  return values
-    .filter((value): value is string => typeof value === 'string')
-    .map((value) => value.trim())
-    .filter((value) => value && value !== '-')
-    .sort((a, b) => a.localeCompare(b));
 }
 
 function parseMultiParam(value: string | null) {
