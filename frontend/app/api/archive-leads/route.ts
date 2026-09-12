@@ -99,8 +99,7 @@ function cleanFacetValues(values: unknown[]) {
     .filter((value): value is string => typeof value === 'string')
     .map((value) => value.trim())
     .filter((value) => value && value !== '-')
-    .sort((a, b) => a.localeCompare(b))
-    .slice(0, 250);
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function parseMultiParam(value: string | null) {

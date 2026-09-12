@@ -1806,9 +1806,9 @@ function MultiSelectFilter({
   onChange: (selected: string[]) => void;
 }) {
   const [query, setQuery] = useState('');
-  const visibleOptions = options
-    .filter((option) => option.toLowerCase().includes(query.toLowerCase()))
-    .slice(0, 80);
+  const visibleOptions = options.filter((option) =>
+    option.toLowerCase().includes(query.toLowerCase()),
+  );
   const summary = selected.length
     ? `${selected.length} selected`
     : `All ${label.toLowerCase()}s`;
