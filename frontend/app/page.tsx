@@ -13,6 +13,7 @@ import {
   FileSpreadsheet,
   LayoutDashboard,
   Lock,
+  MessageCircle,
   Paperclip,
   Plus,
   RefreshCw,
@@ -655,15 +656,15 @@ function MobileNav({
 }
 
 function DashboardView({
-  archive,
   batches,
   templates,
 }: {
-  archive: ArchiveResponse;
   batches: BatchRecord[];
   templates: TemplateRecord[];
 }) {
-  const reachedOut = batches.reduce((sum, batch) => sum + batch.sent, 0);
+  const totalSent = batches.reduce((sum, batch) => sum + batch.sent, 0);
+  const totalRead = batches.reduce((sum, batch) => sum + batch.read, 0);
+  const totalReplies = batches.reduce((sum, batch) => sum + batch.replies, 0);
   const converted = batches.reduce(
     (sum, batch) => sum + (batch.convertedLeadIds || []).length,
     0,
@@ -673,16 +674,21 @@ function DashboardView({
 
   return (
     <div className="space-y-4 px-4 py-5 md:px-6">
-      <section className="grid gap-3 md:grid-cols-3">
-        <Metric
-          icon={Archive}
-          label="Archived leads"
-          value={archive.archiveCount.toLocaleString()}
-        />
+      <section className="grid gap-3 md:grid-cols-4">
         <Metric
           icon={Send}
-          label="Reached out"
-          value={reachedOut.toLocaleString()}
+          label="Total messages sent"
+          value={totalSent.toLocaleString()}
+        />
+        <Metric
+          icon={Eye}
+          label="Total read"
+          value={totalRead.toLocaleString()}
+        />
+        <Metric
+          icon={MessageCircle}
+          label="Total replies"
+          value={totalReplies.toLocaleString()}
         />
         <Metric
           icon={Check}
@@ -696,7 +702,7 @@ function DashboardView({
           <div>
             <h2 className="text-lg font-semibold">Overall performance</h2>
             <p className="text-sm text-muted-foreground">
-              Reads, clicks, replies, and conversions by template.
+              Sent, read, replies, and conversions by batch.
             </p>
           </div>
           <Select
@@ -727,14 +733,14 @@ function DashboardView({
                 <Legend />
                 <Area
                   type="monotone"
-                  dataKey="read"
-                  stroke="#1fa463"
-                  fill="#1fa46333"
+                  dataKey="sent"
+                  stroke="#047857"
+                  fill="#04785722"
                   strokeWidth={2}
                 />
                 <Area
                   type="monotone"
-                  dataKey="clicks"
+                  dataKey="read"
                   stroke="#1769aa"
                   fill="#1769aa22"
                   strokeWidth={2}
@@ -760,7 +766,7 @@ function DashboardView({
           <EmptyState
             icon={BarChart3}
             title="No performance data yet"
-            text="After you send a batch, this trendline will show reads, clicks, replies, and conversions."
+            text="After you send a batch, this trendline will show sent, read, replies, and conversions."
           />
         )}
       </section>
@@ -2247,8 +2253,8 @@ function buildTrendData(batches: BatchRecord[], templateFilter: string) {
     .reverse()
     .map((batch, index) => ({
       label: `Batch ${index + 1}`,
+      sent: batch.sent,
       read: batch.read,
-      clicks: batch.clicks,
       replies: batch.replies,
       converted: (batch.convertedLeadIds || []).length,
     }));
