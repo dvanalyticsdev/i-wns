@@ -11,6 +11,21 @@ export const DEFAULT_CRM_DB_NAME = 'i-crm-workshop';
 export const DEFAULT_WNS_DB_NAME = 'i-wns';
 export const DEFAULT_LEADS_COLLECTION = 'leads';
 export const PAGE_SIZE = 100;
+export const WNS_COURSE_OPTIONS = [
+  '7DAYS_GENAI',
+  'AIML + GenAI',
+  'APCS',
+  'APIDA',
+  'APIDS',
+  'DAS',
+  'FDE',
+  'GenAI Master',
+  'Others',
+];
+
+const KNOWN_COURSE_OPTIONS = WNS_COURSE_OPTIONS.filter(
+  (course) => course !== 'Others',
+);
 
 let crmClient: MongoClient | null = null;
 let wnsClient: MongoClient | null = null;
@@ -149,7 +164,26 @@ export function buildWnsFilter({
     filter.city = { $in: cityValues };
   }
   if (courseValues.length) {
-    filter.company = { $in: courseValues };
+    const includeOthers = courseValues.includes('Others');
+    const selectedKnownCourses = courseValues.filter(
+      (course) => course !== 'Others',
+    );
+    if (includeOthers && selectedKnownCourses.length) {
+      filter.$and = [
+        ...(filter.$and || []),
+        {
+          $or: [
+            { company: { $in: selectedKnownCourses } },
+            { company: { $nin: KNOWN_COURSE_OPTIONS } },
+            { company: { $exists: false } },
+          ],
+        },
+      ];
+    } else if (includeOthers) {
+      filter.company = { $nin: KNOWN_COURSE_OPTIONS };
+    } else {
+      filter.company = { $in: selectedKnownCourses };
+    }
   }
   if (search?.trim()) {
     const term = escapeRegex(search.trim());

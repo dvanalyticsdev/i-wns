@@ -9,6 +9,7 @@ import {
   getWnsDbName,
   PAGE_SIZE,
   toArchiveLead,
+  WNS_COURSE_OPTIONS,
   type SyncedLeadDocument,
 } from '@/lib/lead-sync';
 
@@ -41,7 +42,6 @@ export async function GET(request: NextRequest) {
       filteredCount,
       docs,
       cityFacets,
-      courseFacets,
       lastSynced,
     ] = await Promise.all([
       collection.countDocuments({}),
@@ -53,7 +53,6 @@ export async function GET(request: NextRequest) {
         .limit(limit)
         .toArray(),
       collection.distinct('city', {}),
-      collection.distinct('company', {}),
       collection.findOne({}, { sort: { syncedAt: -1 } }),
     ]);
 
@@ -66,7 +65,7 @@ export async function GET(request: NextRequest) {
       totalPages: Math.max(Math.ceil(filteredCount / limit), 1),
       leads: docs.map(toArchiveLead),
       cities: cleanFacetValues(cityFacets),
-      courses: cleanFacetValues(courseFacets),
+      courses: WNS_COURSE_OPTIONS,
       collection: getLeadCollectionName(),
       database: getWnsDbName(),
       lastSyncedAt: lastSynced?.syncedAt || null,

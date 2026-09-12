@@ -1101,7 +1101,7 @@ function ReachOutView({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="crm">CRM synced leads</SelectItem>
+              <SelectItem value="crm">Archived leads</SelectItem>
               <SelectItem value="excel">Excel upload</SelectItem>
             </SelectContent>
           </Select>
