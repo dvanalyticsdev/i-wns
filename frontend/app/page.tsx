@@ -486,7 +486,7 @@ export default function Home() {
               alt="DV"
               width={128}
               height={88}
-              className="rounded-md border border-border bg-white object-contain p-2"
+              className="object-contain"
             />
             <div>
               <p className="text-lg font-semibold">WhatsApp Reachout</p>
@@ -601,7 +601,7 @@ function PasscodeGate({
             alt="DV"
             width={46}
             height={46}
-            className="rounded-md border border-border bg-white object-contain p-1"
+            className="object-contain"
           />
           <div>
             <h1 className="text-lg font-semibold">WhatsApp Reachout</h1>
@@ -2226,15 +2226,15 @@ function TimelineFilter({
   resultCount: number;
 }) {
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h2 className="text-base font-semibold">Timeline</h2>
-          <p className="text-sm text-muted-foreground">
-            {resultCount.toLocaleString()} batches in selected range.
+    <section className="rounded-lg border border-border bg-card px-3 py-2">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+        <div className="flex shrink-0 items-baseline gap-2">
+          <h2 className="text-sm font-semibold">Timeline</h2>
+          <p className="text-xs text-muted-foreground">
+            {resultCount.toLocaleString()} batches
           </p>
         </div>
-        <div className="grid gap-2 md:grid-cols-[220px_160px_160px]">
+        <div className="grid gap-2 md:grid-cols-[180px_150px_150px]">
           <Select
             value={value.preset}
             onValueChange={(preset) =>
