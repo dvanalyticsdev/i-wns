@@ -28,21 +28,63 @@ const KNOWN_COURSE_OPTIONS = WNS_COURSE_OPTIONS.filter(
 );
 
 const LOCATION_ALIASES: Array<[string, string[]]> = [
+  ['Agra', ['agra']],
   ['Ahmedabad', ['ahmedabad']],
+  ['Ajmer', ['ajmer']],
+  ['Aligarh', ['aligarh']],
+  ['Allahabad', ['allahabad', 'prayagraj']],
+  ['Amritsar', ['amritsar']],
+  ['Aurangabad', ['aurangabad']],
   ['Bangalore', ['bangalore', 'bengaluru', 'banglore']],
+  ['Bareilly', ['bareilly']],
+  ['Bhopal', ['bhopal']],
   ['Bhubaneswar', ['bhubaneswar', 'bbsr']],
+  ['Bikaner', ['bikaner']],
   ['Chandigarh', ['chandigarh']],
   ['Chennai', ['chennai', 'madras']],
+  ['Coimbatore', ['coimbatore']],
   ['Cuttack', ['cuttack']],
+  ['Dehradun', ['dehradun']],
   ['Delhi', ['delhi', 'new delhi', 'ncr']],
+  ['Dhanbad', ['dhanbad']],
+  ['Faridabad', ['faridabad']],
+  ['Ghaziabad', ['ghaziabad']],
+  ['Gorakhpur', ['gorakhpur']],
   ['Gurgaon', ['gurgaon', 'gurugram']],
+  ['Guwahati', ['guwahati']],
+  ['Gwalior', ['gwalior']],
+  ['Hisar', ['hisar']],
   ['Hyderabad', ['hyderabad']],
+  ['Indore', ['indore']],
+  ['Jabalpur', ['jabalpur']],
   ['Jaipur', ['jaipur']],
+  ['Jalandhar', ['jalandhar']],
+  ['Jamshedpur', ['jamshedpur']],
+  ['Jodhpur', ['jodhpur']],
+  ['Kanpur', ['kanpur']],
+  ['Kochi', ['kochi', 'cochin']],
   ['Kolkata', ['kolkata', 'calcutta']],
+  ['Kota', ['kota']],
+  ['Lucknow', ['lucknow']],
+  ['Ludhiana', ['ludhiana']],
+  ['Meerut', ['meerut']],
   ['Mumbai', ['mumbai', 'bombay']],
+  ['Mysore', ['mysore', 'mysuru']],
+  ['Nagpur', ['nagpur']],
+  ['Nashik', ['nashik', 'nasik']],
   ['Noida', ['noida']],
   ['Patna', ['patna']],
   ['Pune', ['pune']],
+  ['Raipur', ['raipur']],
+  ['Rajkot', ['rajkot']],
+  ['Ranchi', ['ranchi']],
+  ['Surat', ['surat']],
+  ['Thane', ['thane']],
+  ['Udaipur', ['udaipur']],
+  ['Vadodara', ['vadodara', 'baroda']],
+  ['Varanasi', ['varanasi', 'banaras']],
+  ['Vijayawada', ['vijayawada']],
+  ['Visakhapatnam', ['visakhapatnam', 'vizag']],
 ];
 
 const INVALID_LOCATION_PATTERN =
@@ -337,10 +379,7 @@ function normalizeLocationOption(value: unknown) {
       return city;
     }
   }
-
-  const words = compact.split(' ').filter(Boolean);
-  if (!words.length || words.length > 3) return '';
-  return words.map(titleCase).join(' ');
+  return '';
 }
 
 function matchesLocationTerm(value: string, term: string) {
@@ -359,14 +398,18 @@ function invalidLocationFilter() {
       { city: { $exists: false } },
       { city: '' },
       { city: '-' },
-      { city: { $not: /[A-Za-z]/ } },
-      { city: INVALID_LOCATION_PATTERN },
+      { city: { $not: knownLocationRegex() } },
     ],
   };
 }
 
-function titleCase(value: string) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
+function knownLocationRegex() {
+  return new RegExp(
+    LOCATION_ALIASES.flatMap(([, aliases]) => aliases)
+      .map(escapeRegex)
+      .join('|'),
+    'i',
+  );
 }
 
 function pickText(doc: Document, keys: string[]) {
