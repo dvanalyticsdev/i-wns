@@ -18,6 +18,7 @@ type SendBatchRequest = {
   name?: string;
   templateName?: string;
   templateId?: string;
+  templateCategory?: string;
   languageCode?: string;
   leadIds?: string[];
   leadSource?: 'crm' | 'excel';
@@ -36,6 +37,7 @@ export async function POST(request: NextRequest) {
       .slice(0, MAX_SEND_PER_REQUEST);
     const batchName = body.name?.trim();
     const templateName = body.templateName?.trim() || body.templateId?.trim();
+    const templateCategory = body.templateCategory?.trim() || '';
     const languageCode = body.languageCode?.trim() || 'en_US';
     const leadSource = body.leadSource === 'excel' ? 'excel' : 'crm';
 
@@ -79,14 +81,17 @@ export async function POST(request: NextRequest) {
       name: batchName,
       templateName,
       templateId: body.templateId || templateName,
+      templateCategory,
       languageCode,
       leadSource,
       requestedLeadIds: leadIds,
       leadIds: leads.map((lead) => lead.crmLeadId),
+      deliveredLeadIds: [],
       readLeadIds: [],
       clickedLeadIds: [],
       repliedLeadIds: [],
       convertedLeadIds: [],
+      sharedLeadIds: [],
       status: 'sending',
       requestedCount: leadIds.length,
       createdAt: now,
@@ -143,11 +148,13 @@ export async function POST(request: NextRequest) {
         $set: {
           status: finalStatus,
           sent: sentCount,
+          delivered: 0,
           failed: failedCount,
           read: 0,
           clicks: 0,
           replies: 0,
           converted: 0,
+          shared: 0,
           updatedAt: new Date(),
         },
       },

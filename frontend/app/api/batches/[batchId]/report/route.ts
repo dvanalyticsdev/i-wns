@@ -94,10 +94,12 @@ export async function GET(request: NextRequest, { params }: Params) {
           String(message?.error || '') ||
           extractError(message?.errors) ||
           extractError(message?.providerResponse?.error),
+        delivered: (batch.deliveredLeadIds || []).includes(leadId),
         read: (batch.readLeadIds || []).includes(leadId),
         clicked: (batch.clickedLeadIds || []).includes(leadId),
         replied: (batch.repliedLeadIds || []).includes(leadId),
         converted: (batch.convertedLeadIds || []).includes(leadId),
+        shared: (batch.sharedLeadIds || []).includes(leadId),
         replies: leadReplies.map((reply) => ({
           text: String(reply.text || ''),
           receivedAt: reply.receivedAt,
@@ -130,11 +132,13 @@ export async function GET(request: NextRequest, { params }: Params) {
       totals: {
         requested: batch.leadIds.length,
         sent: batch.sent,
+        delivered: batch.delivered,
         failed: batch.failed,
         read: batch.read,
         clicked: batch.clicks,
         replied: batch.replies,
         converted: batch.converted,
+        shared: batch.shared,
       },
       page,
       limit: PAGE_SIZE,
@@ -159,10 +163,12 @@ export async function GET(request: NextRequest, { params }: Params) {
 function matchesAction(
   row: {
     messageStatus: string;
+    delivered: boolean;
     read: boolean;
     clicked: boolean;
     replied: boolean;
     converted: boolean;
+    shared: boolean;
   },
   action: string,
 ) {

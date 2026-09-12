@@ -5,27 +5,34 @@ export type BatchRecord = {
   name: string;
   templateId: string;
   templateName?: string;
+  templateCategory?: string;
   leadIds: string[];
+  deliveredLeadIds?: string[];
   readLeadIds?: string[];
   clickedLeadIds?: string[];
   repliedLeadIds?: string[];
   convertedLeadIds: string[];
+  sharedLeadIds?: string[];
   failedLeadIds?: string[];
   sent: number;
+  delivered: number;
   failed: number;
   read: number;
   clicks: number;
   replies: number;
   converted: number;
+  shared: number;
   createdAt: string;
   status: 'Draft' | 'Sent' | 'Failed' | 'Sending';
 };
 
 export function toBatchRecord(doc: WithId<Document>): BatchRecord {
+  const deliveredLeadIds = toStringArray(doc.deliveredLeadIds);
   const readLeadIds = toStringArray(doc.readLeadIds);
   const clickedLeadIds = toStringArray(doc.clickedLeadIds);
   const repliedLeadIds = toStringArray(doc.repliedLeadIds);
   const convertedLeadIds = toStringArray(doc.convertedLeadIds);
+  const sharedLeadIds = toStringArray(doc.sharedLeadIds);
   const failedLeadIds = toStringArray(doc.failedLeadIds);
   const leadIds = toStringArray(doc.leadIds);
   return {
@@ -33,18 +40,23 @@ export function toBatchRecord(doc: WithId<Document>): BatchRecord {
     name: String(doc.name || 'Untitled batch'),
     templateId: String(doc.templateId || doc.templateName || ''),
     templateName: String(doc.templateName || ''),
+    templateCategory: String(doc.templateCategory || ''),
     leadIds,
+    deliveredLeadIds,
     readLeadIds,
     clickedLeadIds,
     repliedLeadIds,
     convertedLeadIds,
+    sharedLeadIds,
     failedLeadIds,
     sent: Number(doc.sent ?? leadIds.length ?? 0),
+    delivered: deliveredLeadIds.length,
     failed: Number(doc.failed ?? failedLeadIds.length ?? 0),
     read: readLeadIds.length,
     clicks: clickedLeadIds.length,
     replies: repliedLeadIds.length,
     converted: convertedLeadIds.length,
+    shared: sharedLeadIds.length,
     createdAt: formatDate(doc.createdAt),
     status: mapStatus(String(doc.status || 'Draft')),
   };

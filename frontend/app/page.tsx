@@ -163,10 +163,12 @@ type ReportLeadRow = {
   messageStatus: string;
   metaMessageId: string;
   error: string;
+  delivered: boolean;
   read: boolean;
   clicked: boolean;
   replied: boolean;
   converted: boolean;
+  shared: boolean;
   replies: Array<{ text: string; receivedAt?: string; type: string }>;
 };
 
@@ -177,11 +179,13 @@ type BatchReportResponse = {
   totals?: {
     requested: number;
     sent: number;
+    delivered: number;
     failed: number;
     read: number;
     clicked: number;
     replied: number;
     converted: number;
+    shared: number;
   };
   page?: number;
   limit?: number;
@@ -200,6 +204,8 @@ const storageKeys = {
   templates: 'i-wns-templates',
   batches: 'i-wns-batches',
 };
+
+const MARKETING_DELIVERY_COST_INR = 0.86;
 
 function readStoredRecords<T>(key: string): T[] {
   if (typeof window === 'undefined') return [];
@@ -1031,6 +1037,7 @@ function ReachOutView({
         name: batchName.trim(),
         templateId,
         templateName: template?.name || templateId,
+        templateCategory: template.category,
         languageCode: template.language || 'en_US',
         leadSource,
         leadIds: selectedLeadIds,
@@ -1377,6 +1384,16 @@ function ReportingView({
   const reportBatch = reportData?.batch || selectedBatch;
   const reportRows = reportData?.rows || [];
   const convertedLeadIds = reportBatch?.convertedLeadIds || [];
+  const sharedLeadIds = reportBatch?.sharedLeadIds || [];
+  const deliveredCount =
+    reportData?.totals?.delivered || reportBatch?.deliveredLeadIds?.length || 0;
+  const marketingReport = reportBatch
+    ? isMarketingTemplate(reportBatch, templates)
+    : false;
+  const reportSpend = marketingReport ? deliveredCount * MARKETING_DELIVERY_COST_INR : 0;
+  const costPerAdmission = convertedLeadIds.length
+    ? reportSpend / convertedLeadIds.length
+    : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -1483,6 +1500,61 @@ function ReportingView({
     }
   }
 
+  async function toggleShared(leadId: string) {
+    if (!reportBatch) return;
+    const shouldShare = !sharedLeadIds.includes(leadId);
+    setBatches((current) =>
+      current.map((batch) => {
+        if (batch.id !== reportBatch.id) return batch;
+        const existing = batch.sharedLeadIds || [];
+        const nextSharedLeadIds = shouldShare
+          ? [...existing, leadId]
+          : existing.filter((id) => id !== leadId);
+        return {
+          ...batch,
+          sharedLeadIds: nextSharedLeadIds,
+          shared: nextSharedLeadIds.length,
+        };
+      }),
+    );
+    try {
+      const response = await fetch(`/api/batches/${reportBatch.id}/shared`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId, shared: shouldShare }),
+      });
+      const data = (await response.json()) as {
+        batch?: BatchRecord;
+        message?: string;
+      };
+      if (!response.ok || !data.batch) {
+        throw new Error(data.message || 'Unable to update shared status.');
+      }
+      setBatches((current) =>
+        current.map((batch) =>
+          batch.id === data.batch?.id ? (data.batch as BatchRecord) : batch,
+        ),
+      );
+      setReportData((current) =>
+        current
+          ? {
+              ...current,
+              batch: data.batch,
+              rows: current.rows?.map((row) =>
+                row.lead.id === leadId ? { ...row, shared: shouldShare } : row,
+              ),
+            }
+          : current,
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : 'Unable to update shared status.',
+      );
+    }
+  }
+
   async function deleteReport(batch: BatchRecord) {
     const confirmed = window.confirm(
       `Delete the "${batch.name}" report? Its leads will become selectable again and it will stop counting as reached.`,
@@ -1528,6 +1600,7 @@ function ReportingView({
       reply: row.replies.map((reply) => reply.text).join(' | '),
       error: row.error,
       converted: row.converted ? 'Yes' : 'No',
+      shared: row.shared ? 'Yes' : 'No',
     }));
     const csv = toCsv(rows);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -1639,13 +1712,20 @@ function ReportingView({
               Export leads
             </Button>
           </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-6">
+          <div className="mt-4 grid gap-3 md:grid-cols-5 xl:grid-cols-10">
             <MiniMetric label="Sent" value={reportData?.totals?.sent || 0} />
+            <MiniMetric label="Delivered" value={deliveredCount} />
             <MiniMetric label="Failed" value={reportData?.totals?.failed || 0} />
             <MiniMetric label="Read" value={reportData?.totals?.read || 0} />
             <MiniMetric label="Clicks" value={reportData?.totals?.clicked || 0} />
             <MiniMetric label="Replies" value={reportData?.totals?.replied || 0} />
             <MiniMetric label="Converted" value={convertedLeadIds.length} />
+            <MiniMetric label="Shared" value={sharedLeadIds.length} />
+            <MiniMetric label="Spend" value={formatInr(reportSpend)} />
+            <MiniMetric
+              label="Cost/admission"
+              value={costPerAdmission === null ? '-' : formatInr(costPerAdmission)}
+            />
           </div>
           <div className="mt-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <h3 className="font-semibold">Sent leads</h3>
@@ -1702,6 +1782,7 @@ function ReportingView({
                       <TableHead>Clicked</TableHead>
                       <TableHead>Reply</TableHead>
                       <TableHead>Meta error</TableHead>
+                      <TableHead>Shared</TableHead>
                       <TableHead>Converted</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1735,6 +1816,16 @@ function ReportingView({
                         </TableCell>
                         <TableCell className="max-w-sm text-sm text-muted-foreground">
                           {row.error || '-'}
+                        </TableCell>
+                        <TableCell>
+                          <label className="inline-flex cursor-pointer items-center gap-2">
+                            <input
+                              checked={row.shared}
+                              onChange={() => void toggleShared(row.lead.id)}
+                              type="checkbox"
+                            />
+                            <span className="text-sm">Shared</span>
+                          </label>
                         </TableCell>
                         <TableCell>
                           <label className="inline-flex cursor-pointer items-center gap-2">
@@ -2060,11 +2151,13 @@ function MetaFlag({ label, ready }: { label: string; ready: boolean }) {
   );
 }
 
-function MiniMetric({ label, value }: { label: string; value: number }) {
+function MiniMetric({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="rounded-lg bg-muted p-3">
       <p className="text-sm text-muted-foreground">{label}</p>
-      <p className="text-2xl font-semibold">{value.toLocaleString()}</p>
+      <p className="text-2xl font-semibold">
+        {typeof value === 'number' ? value.toLocaleString() : value}
+      </p>
     </div>
   );
 }
@@ -2132,6 +2225,27 @@ function templateName(templates: TemplateRecord[], id: string) {
   return templates.find((template) => template.id === id)?.name || '-';
 }
 
+function isMarketingTemplate(batch: BatchRecord, templates: TemplateRecord[]) {
+  if (batch.templateCategory?.toUpperCase() === 'MARKETING') {
+    return true;
+  }
+  const template = templates.find(
+    (item) =>
+      item.id === batch.templateId ||
+      item.name === batch.templateId ||
+      item.name === batch.templateName,
+  );
+  return template?.category?.toUpperCase() === 'MARKETING';
+}
+
+function formatInr(value: number) {
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
 function filterLeadsByAction(
   leads: ArchiveLead[],
   batch: BatchRecord | undefined,
@@ -2178,6 +2292,7 @@ function reportStatusLabel(row: ReportLeadRow) {
   if (row.replied) return 'Replied';
   if (row.clicked) return 'Clicked';
   if (row.read) return 'Read';
+  if (row.delivered) return 'Delivered';
   if (row.messageStatus === 'sent') return 'Message sent';
   return row.messageStatus.replace(/_/g, ' ');
 }
