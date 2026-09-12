@@ -71,8 +71,9 @@ export async function GET(request: NextRequest, { params }: Params) {
       repliesByLead.set(leadId, [...(repliesByLead.get(leadId) || []), reply]);
     }
 
+    const leadSource = String(batchDoc.leadSource || 'crm');
     const leads = await db
-      .collection(getLeadCollectionName())
+      .collection(leadSource === 'excel' ? 'excelLeads' : getLeadCollectionName())
       .find({ crmLeadId: { $in: batch.leadIds } })
       .toArray();
     const leadsById = new Map(

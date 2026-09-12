@@ -20,6 +20,7 @@ type SendBatchRequest = {
   templateId?: string;
   languageCode?: string;
   leadIds?: string[];
+  leadSource?: 'crm' | 'excel';
   bodyParameters?: string[];
 };
 
@@ -36,6 +37,7 @@ export async function POST(request: NextRequest) {
     const batchName = body.name?.trim();
     const templateName = body.templateName?.trim() || body.templateId?.trim();
     const languageCode = body.languageCode?.trim() || 'en_US';
+    const leadSource = body.leadSource === 'excel' ? 'excel' : 'crm';
 
     if (!batchName || !templateName || !leadIds.length) {
       return NextResponse.json(
@@ -61,7 +63,9 @@ export async function POST(request: NextRequest) {
     const client = await getWnsClient();
     const db = client.db(getWnsDbName());
     const leads = await db
-      .collection<SyncedLeadDocument>(getLeadCollectionName())
+      .collection<SyncedLeadDocument>(
+        leadSource === 'excel' ? 'excelLeads' : getLeadCollectionName(),
+      )
       .find({ crmLeadId: { $in: leadIds } })
       .toArray();
 
@@ -76,6 +80,7 @@ export async function POST(request: NextRequest) {
       templateName,
       templateId: body.templateId || templateName,
       languageCode,
+      leadSource,
       requestedLeadIds: leadIds,
       leadIds: leads.map((lead) => lead.crmLeadId),
       readLeadIds: [],

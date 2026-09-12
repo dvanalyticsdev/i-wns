@@ -116,6 +116,16 @@ type SendBatchResponse = {
   message?: string;
 };
 
+type ExcelUploadResponse = {
+  status?: string;
+  importId?: string;
+  fileName?: string;
+  totalRows?: number;
+  validRows?: number;
+  leads?: ArchiveLead[];
+  message?: string;
+};
+
 type MetaStatus = {
   configured: boolean;
   webhookReady: boolean;
@@ -1042,11 +1052,22 @@ function ReachOutView({
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
   const [selectionCount, setSelectionCount] = useState('500');
   const [selecting, setSelecting] = useState(false);
+  const [leadSource, setLeadSource] = useState<'crm' | 'excel'>('crm');
+  const [excelLeads, setExcelLeads] = useState<ArchiveLead[]>([]);
+  const [excelFileName, setExcelFileName] = useState('');
+  const [uploadingExcel, setUploadingExcel] = useState(false);
 
   const currentPage = archive.page || 1;
-  const totalPages = archive.totalPages || 1;
-  const filteredCount = archive.filteredCount ?? archive.archiveCount;
-  const visibleLeads = archive.leads;
+  const searchedExcelLeads = excelLeads.filter((lead) =>
+    [lead.name, lead.phone].join(' ').toLowerCase().includes(search.toLowerCase()),
+  );
+  const totalPages = leadSource === 'excel' ? 1 : archive.totalPages || 1;
+  const filteredCount =
+    leadSource === 'excel'
+      ? searchedExcelLeads.length
+      : archive.filteredCount ?? archive.archiveCount;
+  const visibleLeads =
+    leadSource === 'excel' ? searchedExcelLeads.slice(0, 100) : archive.leads;
   const cities = archive.cities || [];
   const courses = archive.courses || [];
   const sendTemplates = templates.filter(isApprovedMetaTemplate);
@@ -1066,6 +1087,16 @@ function ReachOutView({
 
   async function selectFilteredLimit() {
     const requested = Math.max(Number(selectionCount || '0'), 1);
+    if (leadSource === 'excel') {
+      const nextLeadIds = searchedExcelLeads
+        .slice(0, requested)
+        .map((lead) => lead.id);
+      setSelectedLeadIds(nextLeadIds);
+      setNotice(
+        `Selected ${nextLeadIds.length.toLocaleString()} Excel leads from current search.`,
+      );
+      return;
+    }
     setSelecting(true);
     try {
       const params = new URLSearchParams({
@@ -1127,6 +1158,7 @@ function ReachOutView({
         templateId,
         templateName: template?.name || templateId,
         languageCode: template.language || 'en_US',
+        leadSource,
         leadIds: selectedLeadIds,
       }),
     });
@@ -1144,6 +1176,34 @@ function ReachOutView({
     );
   }
 
+  async function uploadExcelFile(file: File | null) {
+    if (!file) return;
+    setUploadingExcel(true);
+    try {
+      const formData = new FormData();
+      formData.set('file', file);
+      const response = await fetch('/api/excel-leads/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = (await response.json()) as ExcelUploadResponse;
+      if (!response.ok) {
+        setNotice(data.message || 'Unable to upload Excel leads.');
+        return;
+      }
+      const uploadedLeads = data.leads || [];
+      setLeadSource('excel');
+      setExcelLeads(uploadedLeads);
+      setExcelFileName(data.fileName || file.name);
+      setSelectedLeadIds(uploadedLeads.map((lead) => lead.id));
+      setNotice(
+        `Uploaded ${uploadedLeads.length.toLocaleString()} leads from ${data.fileName || file.name}.`,
+      );
+    } finally {
+      setUploadingExcel(false);
+    }
+  }
+
   return (
     <div className="grid gap-4 px-4 py-5 md:px-6 xl:grid-cols-[minmax(0,1fr)_360px]">
       <section className="rounded-lg border border-border bg-card">
@@ -1154,25 +1214,60 @@ function ReachOutView({
             batch, then send.
           </p>
         </div>
-        <div className="grid gap-3 border-b border-border p-4 md:grid-cols-2">
-          <MultiSelectFilter
-            label="Location"
-            options={cities}
-            selected={selectedCities}
-            onChange={(values) => {
-              setSelectedCities(values);
-              void loadPage(1, values, selectedCourses);
+        <div className="grid gap-3 border-b border-border p-4 md:grid-cols-[240px_minmax(0,1fr)]">
+          <Select
+            value={leadSource}
+            onValueChange={(value) => {
+              if (value !== 'crm' && value !== 'excel') return;
+              setLeadSource(value);
+              setSelectedLeadIds([]);
             }}
-          />
-          <MultiSelectFilter
-            label="Course"
-            options={courses}
-            selected={selectedCourses}
-            onChange={(values) => {
-              setSelectedCourses(values);
-              void loadPage(1, selectedCities, values);
-            }}
-          />
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="crm">CRM synced leads</SelectItem>
+              <SelectItem value="excel">Excel upload</SelectItem>
+            </SelectContent>
+          </Select>
+          {leadSource === 'excel' ? (
+            <label className="flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-border px-3 text-sm font-medium hover:bg-muted">
+              <Upload className="size-4" />
+              {uploadingExcel
+                ? 'Uploading Excel'
+                : excelFileName || 'Upload .xlsx with name and phone'}
+              <input
+                accept=".xlsx"
+                className="hidden"
+                type="file"
+                onChange={(event) =>
+                  void uploadExcelFile(event.currentTarget.files?.[0] || null)
+                }
+              />
+            </label>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2">
+              <MultiSelectFilter
+                label="Location"
+                options={cities}
+                selected={selectedCities}
+                onChange={(values) => {
+                  setSelectedCities(values);
+                  void loadPage(1, values, selectedCourses);
+                }}
+              />
+              <MultiSelectFilter
+                label="Course"
+                options={courses}
+                selected={selectedCourses}
+                onChange={(values) => {
+                  setSelectedCourses(values);
+                  void loadPage(1, selectedCities, values);
+                }}
+              />
+            </div>
+          )}
         </div>
         <div className="grid gap-3 border-b border-border p-4 md:grid-cols-[minmax(0,1fr)_auto_auto]">
           <div className="relative">
@@ -1187,12 +1282,16 @@ function ReachOutView({
           <Button
             variant="outline"
             onClick={() =>
-              void loadArchivePage({
-                cities: selectedCities,
-                courses: selectedCourses,
-                page: 1,
-                search,
-              })
+              leadSource === 'crm'
+                ? void loadArchivePage({
+                    cities: selectedCities,
+                    courses: selectedCourses,
+                    page: 1,
+                    search,
+                  })
+                : setNotice(
+                    `${searchedExcelLeads.length.toLocaleString()} Excel leads match this search.`,
+                  )
             }
           >
             Search
@@ -1216,13 +1315,18 @@ function ReachOutView({
             Showing page {currentPage.toLocaleString()} of{' '}
             {totalPages.toLocaleString()} - {visibleLeads.length} leads on this
             page, {filteredCount.toLocaleString()} matching leads total.
+            {leadSource === 'excel'
+              ? ' Excel files must include name and phone columns.'
+              : ''}
           </span>
           <div className="flex gap-2">
             <Button
               variant="outline"
               size="sm"
               disabled={currentPage <= 1}
-              onClick={() => void loadPage(currentPage - 1)}
+              onClick={() =>
+                leadSource === 'crm' ? void loadPage(currentPage - 1) : undefined
+              }
             >
               <ChevronLeft className="size-4" />
               Page {Math.max(currentPage - 1, 1)}
@@ -1231,7 +1335,9 @@ function ReachOutView({
               variant="outline"
               size="sm"
               disabled={currentPage >= totalPages}
-              onClick={() => void loadPage(currentPage + 1)}
+              onClick={() =>
+                leadSource === 'crm' ? void loadPage(currentPage + 1) : undefined
+              }
             >
               Page {Math.min(currentPage + 1, totalPages)}
               <ChevronRight className="size-4" />
