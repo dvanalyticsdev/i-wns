@@ -490,7 +490,6 @@ export default function Home() {
             />
             <div>
               <p className="text-lg font-semibold">WhatsApp Reachout</p>
-              <p className="text-xs text-muted-foreground">Lead campaign OS</p>
             </div>
           </div>
 
