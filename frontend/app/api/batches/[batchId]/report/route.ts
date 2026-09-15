@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server';
 
 import { isAuthenticated, unauthorizedResponse } from '@/lib/auth';
 import { toBatchRecord } from '@/lib/batches';
+import { applyLeadHistory, getLeadHistoryMap } from '@/lib/lead-history';
 import {
   getLeadCollectionName,
   getWnsClient,
@@ -77,13 +78,23 @@ export async function GET(request: NextRequest, { params }: Params) {
       .find({ crmLeadId: { $in: batch.leadIds } })
       .toArray();
     const leadsById = new Map(
-      leads.map((lead) => [String(lead.crmLeadId), toArchiveLead(lead)]),
+      leads.map((lead) => [String(lead.crmLeadId), lead]),
+    );
+    const historyByPhone = await getLeadHistoryMap(
+      db,
+      leads.map((lead) => lead.normalizedPhone || lead.phone),
     );
 
     const rows = batch.leadIds.map((leadId) => {
-      const lead =
-        leadsById.get(leadId) ||
-        toArchiveLead({ crmLeadId: leadId, name: 'Unknown lead' });
+      const leadDoc = leadsById.get(leadId);
+      const lead = leadDoc
+        ? toArchiveLead(
+            applyLeadHistory(
+              leadDoc,
+              historyByPhone.get(leadDoc.normalizedPhone || leadDoc.phone),
+            ),
+          )
+        : toArchiveLead({ crmLeadId: leadId, name: 'Unknown lead' });
       const message = messageByLead.get(leadId);
       const leadReplies = repliesByLead.get(leadId) || [];
       return {
@@ -191,12 +202,17 @@ function extractError(value: unknown): string {
   }
   if (typeof value === 'object') {
     const record = value as Record<string, unknown>;
-    return String(
+    return toText(
       record.message ||
         record.title ||
-        (record.error_data as Record<string, unknown> | undefined)?.details ||
-        '',
+        (record.error_data as Record<string, unknown> | undefined)?.details,
     );
   }
+  return '';
+}
+
+function toText(value: unknown) {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
   return '';
 }

@@ -104,6 +104,9 @@ export type ArchiveLead = {
   lastAction: string;
   status: string;
   score: number;
+  messageCount: number;
+  isBlocked?: boolean;
+  blockedAt?: Date | string;
 };
 
 export type SyncedLeadDocument = ArchiveLead & {
@@ -321,6 +324,9 @@ export function toArchiveLead(doc: Document): ArchiveLead {
       'No recent activity',
     status: pickText(doc, ['status']) || 'Archived',
     score: typeof doc.score === 'number' ? doc.score : scoreLead(stage),
+    messageCount: Number(doc.messageCount || 0),
+    isBlocked: Boolean(doc.isBlocked || doc.blockedAt),
+    blockedAt: doc.blockedAt as Date | string | undefined,
   };
 }
 

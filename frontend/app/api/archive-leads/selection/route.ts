@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 import { isAuthenticated, unauthorizedResponse } from '@/lib/auth';
+import { getBlockedPhones } from '@/lib/lead-history';
 import {
   buildWnsFilter,
   getLeadCollectionName,
@@ -32,9 +33,19 @@ export async function GET(request: NextRequest) {
       .db(getWnsDbName())
       .collection<SyncedLeadDocument>(getLeadCollectionName());
     const filter = buildWnsFilter({ cities, courses, search });
+    const db = client.db(getWnsDbName());
+    const blockedPhones = await getBlockedPhones(db);
+    if (blockedPhones.length) {
+      filter.normalizedPhone = { $nin: blockedPhones };
+    }
     const docs = await collection
       .find(filter, { projection: { crmLeadId: 1 } })
-      .sort({ crmUpdatedAt: -1, crmCreatedAt: -1, syncedAt: -1 })
+      .sort({
+        messageCount: 1,
+        crmUpdatedAt: -1,
+        crmCreatedAt: -1,
+        syncedAt: -1,
+      })
       .limit(limit)
       .toArray();
 

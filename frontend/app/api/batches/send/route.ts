@@ -5,6 +5,12 @@ import type { NextRequest } from 'next/server';
 import { isAuthenticated, unauthorizedResponse } from '@/lib/auth';
 import { toBatchRecord } from '@/lib/batches';
 import {
+  applyLeadHistory,
+  getLeadHistoryMap,
+  normalizeLeadPhone,
+  upsertLeadHistories,
+} from '@/lib/lead-history';
+import {
   getLeadCollectionName,
   getWnsClient,
   getWnsDbName,
@@ -64,12 +70,52 @@ export async function POST(request: NextRequest) {
 
     const client = await getWnsClient();
     const db = client.db(getWnsDbName());
-    const leads = await db
+    const leadCollectionName =
+      leadSource === 'excel' ? 'excelLeads' : getLeadCollectionName();
+    const matchedLeads = await db
       .collection<SyncedLeadDocument>(
-        leadSource === 'excel' ? 'excelLeads' : getLeadCollectionName(),
+        leadCollectionName,
       )
       .find({ crmLeadId: { $in: leadIds } })
       .toArray();
+    const historyByPhone = await getLeadHistoryMap(
+      db,
+      matchedLeads.map((lead) => lead.normalizedPhone || lead.phone),
+    );
+    const seenPhones = new Set<string>();
+    const leads = matchedLeads
+      .map((lead) =>
+        applyLeadHistory(
+          lead,
+          historyByPhone.get(normalizeLeadPhone(lead.normalizedPhone || lead.phone)),
+        ),
+      )
+      .filter((lead) => {
+        const normalizedPhone = normalizeLeadPhone(
+          lead.normalizedPhone || lead.phone,
+        );
+        if (!normalizedPhone || lead.isBlocked || seenPhones.has(normalizedPhone)) {
+          return false;
+        }
+        seenPhones.add(normalizedPhone);
+        return true;
+      })
+      .sort(
+        (left, right) =>
+          left.messageCount - right.messageCount ||
+          String(left.name || '').localeCompare(String(right.name || '')),
+      );
+
+    if (!leads.length) {
+      return NextResponse.json(
+        {
+          status: 'error',
+          message:
+            'No eligible leads remain after blocked and duplicate checks.',
+        },
+        { status: 400 },
+      );
+    }
 
     const now = new Date();
     const batchId = new ObjectId();
@@ -103,9 +149,12 @@ export async function POST(request: NextRequest) {
 
     for (const lead of leads) {
       const sentAt = new Date();
+      const normalizedPhone = normalizeLeadPhone(
+        lead.normalizedPhone || lead.phone,
+      );
       try {
         const providerResponse = await sendTemplateMessage({
-          to: lead.phone,
+          to: normalizedPhone,
           templateName,
           languageCode,
           bodyParameters: body.bodyParameters,
@@ -114,7 +163,8 @@ export async function POST(request: NextRequest) {
         await messages.insertOne({
           batchId,
           leadId: lead.crmLeadId,
-          to: lead.phone,
+          to: normalizedPhone,
+          normalizedPhone,
           wamid,
           templateName,
           languageCode,
@@ -123,12 +173,25 @@ export async function POST(request: NextRequest) {
           createdAt: sentAt,
           updatedAt: sentAt,
         });
+        await upsertLeadHistories(db, [lead], {
+          batchId: batchId.toString(),
+          sentAt,
+        });
+        await db.collection(leadCollectionName).updateMany(
+          { normalizedPhone },
+          {
+            $inc: { messageCount: 1 },
+            $set: { lastSentAt: sentAt, reachedOut: true, updatedAt: sentAt },
+            $addToSet: { batchIds: batchId.toString() },
+          },
+        );
         sentCount += 1;
       } catch (error) {
         await messages.insertOne({
           batchId,
           leadId: lead.crmLeadId,
-          to: lead.phone,
+          to: normalizedPhone,
+          normalizedPhone,
           templateName,
           languageCode,
           status: 'failed',
@@ -166,7 +229,9 @@ export async function POST(request: NextRequest) {
       batchId: batchId.toString(),
       batch: batch ? toBatchRecord(batch) : null,
       requestedCount: leadIds.length,
-      matchedLeadCount: leads.length,
+      matchedLeadCount: matchedLeads.length,
+      eligibleLeadCount: leads.length,
+      skippedLeadCount: Math.max(matchedLeads.length - leads.length, 0),
       sentCount,
       failedCount,
     });

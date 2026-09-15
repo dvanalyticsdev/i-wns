@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 import { isAuthenticated, unauthorizedResponse } from '@/lib/auth';
+import { applyLeadHistory, getLeadHistoryMap } from '@/lib/lead-history';
 import {
   getLeadCollectionName,
   getWnsClient,
@@ -24,16 +25,31 @@ export async function POST(request: NextRequest) {
       .slice(0, MAX_IDS);
 
     const client = await getWnsClient();
-    const collection = client
-      .db(getWnsDbName())
-      .collection<SyncedLeadDocument>(getLeadCollectionName());
+    const db = client.db(getWnsDbName());
+    const collection = db.collection<SyncedLeadDocument>(getLeadCollectionName());
     const docs = await collection
       .find({ crmLeadId: { $in: leadIds } })
-      .sort({ crmUpdatedAt: -1, crmCreatedAt: -1, syncedAt: -1 })
+      .sort({
+        messageCount: 1,
+        crmUpdatedAt: -1,
+        crmCreatedAt: -1,
+        syncedAt: -1,
+      })
       .toArray();
+    const historyByPhone = await getLeadHistoryMap(
+      db,
+      docs.map((doc) => doc.normalizedPhone || doc.phone),
+    );
 
     return NextResponse.json({
-      leads: docs.map(toArchiveLead),
+      leads: docs.map((doc) =>
+        toArchiveLead(
+          applyLeadHistory(
+            doc,
+            historyByPhone.get(doc.normalizedPhone || doc.phone),
+          ),
+        ),
+      ),
       requestedCount: leadIds.length,
       returnedCount: docs.length,
     });

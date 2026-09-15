@@ -4,6 +4,7 @@ import Image from 'next/image';
 import { useEffect, useState } from 'react';
 import {
   Archive,
+  Ban,
   BarChart3,
   Check,
   ChevronLeft,
@@ -62,6 +63,7 @@ type ViewId =
   | 'templates'
   | 'reachout'
   | 'reporting'
+  | 'blocked'
   | 'sync'
   | 'settings';
 
@@ -76,6 +78,9 @@ type ArchiveLead = {
   lastAction: string;
   status: string;
   score: number;
+  messageCount: number;
+  isBlocked?: boolean;
+  blockedAt?: string;
 };
 
 type ArchiveResponse = {
@@ -122,6 +127,7 @@ type ExcelUploadResponse = {
   fileName?: string;
   totalRows?: number;
   validRows?: number;
+  skippedBlockedCount?: number;
   leads?: ArchiveLead[];
   message?: string;
 };
@@ -242,6 +248,7 @@ const navItems: Array<{ id: ViewId; label: string; icon: LucideIcon }> = [
   { id: 'templates', label: 'Templates', icon: ClipboardList },
   { id: 'reachout', label: 'Reach Out', icon: Send },
   { id: 'reporting', label: 'Reporting', icon: BarChart3 },
+  { id: 'blocked', label: 'Blocked Leads', icon: Ban },
   { id: 'sync', label: 'CRM Sync', icon: RefreshCw },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
@@ -567,6 +574,9 @@ export default function Home() {
               setSelectedReportId={setSelectedReportId}
               setNotice={setNotice}
             />
+          )}
+          {activeView === 'blocked' && (
+            <BlockedLeadsView setNotice={setNotice} />
           )}
           {activeView === 'sync' && (
             <SyncView archive={archive} onSyncCrm={syncCrmLeads} />
@@ -1089,6 +1099,7 @@ function ReachOutView({
     setBatches((current) => [data.batch as BatchRecord, ...current]);
     setBatchName('');
     setSelectedLeadIds([]);
+    setSelectedReportId(data.batch.id);
     setActiveView('reporting');
     setNotice(
       `Sent ${Number(data.sentCount || 0).toLocaleString()} messages. ${Number(data.failedCount || 0).toLocaleString()} failed.`,
@@ -1116,7 +1127,7 @@ function ReachOutView({
       setExcelFileName(data.fileName || file.name);
       setSelectedLeadIds(uploadedLeads.map((lead) => lead.id));
       setNotice(
-        `Uploaded ${uploadedLeads.length.toLocaleString()} leads from ${data.fileName || file.name}.`,
+        `Uploaded ${uploadedLeads.length.toLocaleString()} eligible leads from ${data.fileName || file.name}. ${Number(data.skippedBlockedCount || 0).toLocaleString()} blocked leads skipped.`,
       );
     } finally {
       setUploadingExcel(false);
@@ -1271,6 +1282,7 @@ function ReachOutView({
                 <TableHead>Lead</TableHead>
                 <TableHead>Location</TableHead>
                 <TableHead>Course</TableHead>
+                <TableHead>Messages received</TableHead>
                 <TableHead>Score</TableHead>
               </TableRow>
             </TableHeader>
@@ -1293,6 +1305,7 @@ function ReachOutView({
                   </TableCell>
                   <TableCell>{lead.city}</TableCell>
                   <TableCell>{lead.company}</TableCell>
+                  <TableCell>{lead.messageCount || 0}</TableCell>
                   <TableCell>{lead.score}</TableCell>
                 </TableRow>
               ))}
@@ -1394,7 +1407,7 @@ function ReachOutView({
 
 function ReportingView({
   batches,
-  leads,
+  leads: _leads,
   templates,
   selectedReportId,
   showReportDetail,
@@ -1596,6 +1609,52 @@ function ReportingView({
           ? error.message
           : 'Unable to update shared status.',
       );
+    }
+  }
+
+  async function blockLead(row: ReportLeadRow) {
+    if (!reportBatch) return;
+    const confirmed = window.confirm(
+      `Block ${row.lead.name} (${row.lead.phone}) from future WNS and Excel sends?`,
+    );
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch('/api/blocked-leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadId: row.lead.id,
+          phone: row.lead.phone,
+          name: row.lead.name,
+          company: row.lead.company,
+          city: row.lead.city,
+          batchId: reportBatch.id,
+          reason: 'Blocked from batch report',
+        }),
+      });
+      const data = (await response.json()) as { message?: string };
+      if (!response.ok) {
+        throw new Error(data.message || 'Unable to block lead.');
+      }
+      setReportData((current) =>
+        current
+          ? {
+              ...current,
+              rows: current.rows?.map((currentRow) =>
+                currentRow.lead.id === row.lead.id
+                  ? {
+                      ...currentRow,
+                      lead: { ...currentRow.lead, isBlocked: true },
+                    }
+                  : currentRow,
+              ),
+            }
+          : current,
+      );
+      setNotice(`${row.lead.name} moved to blocked leads.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to block lead.');
     }
   }
 
@@ -1830,6 +1889,7 @@ function ReportingView({
                   <TableHeader>
                     <TableRow>
                       <TableHead>Lead</TableHead>
+                      <TableHead>Messages received</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Read</TableHead>
                       <TableHead>Clicked</TableHead>
@@ -1837,6 +1897,7 @@ function ReportingView({
                       <TableHead>Meta error</TableHead>
                       <TableHead>Shared</TableHead>
                       <TableHead>Converted</TableHead>
+                      <TableHead>Block</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1851,6 +1912,7 @@ function ReportingView({
                             {row.lead.city} - {row.lead.company}
                           </div>
                         </TableCell>
+                        <TableCell>{row.lead.messageCount || 0}</TableCell>
                         <TableCell>{reportStatusLabel(row)}</TableCell>
                         <TableCell>{row.read ? 'Yes' : 'No'}</TableCell>
                         <TableCell>{row.clicked ? 'Yes' : 'No'}</TableCell>
@@ -1889,6 +1951,20 @@ function ReportingView({
                             />
                             <span className="text-sm">Mark converted</span>
                           </label>
+                        </TableCell>
+                        <TableCell>
+                          {row.lead.isBlocked ? (
+                            <Badge variant="outline">Blocked</Badge>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void blockLead(row)}
+                            >
+                              <Ban className="size-4" />
+                              Block
+                            </Button>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -1934,6 +2010,106 @@ function ReportingView({
           )}
         </section>
       )}
+    </div>
+  );
+}
+
+function BlockedLeadsView({
+  setNotice,
+}: {
+  setNotice: (notice: string) => void;
+}) {
+  const [blockedLeads, setBlockedLeads] = useState<ArchiveLead[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadBlockedLeads() {
+      setLoading(true);
+      try {
+        const response = await fetch('/api/blocked-leads', {
+          cache: 'no-store',
+        });
+        const data = (await response.json()) as {
+          leads?: ArchiveLead[];
+          message?: string;
+        };
+        if (!response.ok) {
+          throw new Error(data.message || 'Unable to load blocked leads.');
+        }
+        if (!cancelled) {
+          setBlockedLeads(data.leads || []);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setNotice(
+            error instanceof Error
+              ? error.message
+              : 'Unable to load blocked leads.',
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+    void loadBlockedLeads();
+    return () => {
+      cancelled = true;
+    };
+  }, [setNotice]);
+
+  return (
+    <div className="space-y-4 px-4 py-5 md:px-6">
+      <section className="rounded-lg border border-border bg-card">
+        <div className="border-b border-border p-4">
+          <h2 className="text-lg font-semibold">Blocked leads</h2>
+          <p className="text-sm text-muted-foreground">
+            These phone numbers are excluded automatically from WNS lists,
+            Excel uploads, and batch sends.
+          </p>
+        </div>
+        {loading ? (
+          <div className="p-5 text-sm text-muted-foreground">
+            Loading blocked leads.
+          </div>
+        ) : blockedLeads.length ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Lead</TableHead>
+                <TableHead>Location</TableHead>
+                <TableHead>Course</TableHead>
+                <TableHead>Messages received</TableHead>
+                <TableHead>Blocked</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {blockedLeads.map((lead) => (
+                <TableRow key={lead.id}>
+                  <TableCell>
+                    <div className="font-medium">{lead.name}</div>
+                    <div className="text-sm text-muted-foreground">
+                      {lead.phone}
+                    </div>
+                  </TableCell>
+                  <TableCell>{lead.city}</TableCell>
+                  <TableCell>{lead.company}</TableCell>
+                  <TableCell>{lead.messageCount || 0}</TableCell>
+                  <TableCell>{lead.lastAction}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <EmptyState
+            icon={Ban}
+            title="No blocked leads"
+            text="Blocked leads will appear here after you block them from a batch report."
+          />
+        )}
+      </section>
     </div>
   );
 }
@@ -2442,46 +2618,6 @@ function addDays(date: Date, days: number) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
   return next;
-}
-
-function filterLeadsByAction(
-  leads: ArchiveLead[],
-  batch: BatchRecord | undefined,
-  action: ReportActionFilter,
-) {
-  if (!batch) return [];
-  const readIds = batch.readLeadIds || [];
-  const clickedIds = batch.clickedLeadIds || [];
-  const repliedIds = batch.repliedLeadIds || [];
-  const convertedIds = batch.convertedLeadIds || [];
-  const actionSets: Record<ReportActionFilter, Set<string>> = {
-    all: new Set(batch.leadIds),
-    sent: new Set(batch.leadIds),
-    failed: new Set(batch.failedLeadIds || []),
-    read: new Set(readIds),
-    clicked: new Set(clickedIds),
-    replied: new Set(repliedIds),
-    converted: new Set(convertedIds),
-    'not-opened': new Set(
-      batch.leadIds.filter((leadId) => !readIds.includes(leadId)),
-    ),
-  };
-  const allowed = actionSets[action];
-  return leads.filter((lead) => allowed.has(lead.id));
-}
-
-function actionLabel(action: ReportActionFilter) {
-  const labels: Record<ReportActionFilter, string> = {
-    all: 'All',
-    sent: 'Message sent',
-    failed: 'Failed',
-    read: 'Read',
-    clicked: 'Clicked',
-    replied: 'Replied',
-    converted: 'Converted',
-    'not-opened': 'Not opened',
-  };
-  return labels[action];
 }
 
 function reportStatusLabel(row: ReportLeadRow) {

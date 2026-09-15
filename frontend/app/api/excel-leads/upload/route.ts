@@ -4,6 +4,12 @@ import type { NextRequest } from 'next/server';
 import * as XLSX from 'xlsx';
 
 import { isAuthenticated, unauthorizedResponse } from '@/lib/auth';
+import {
+  applyLeadHistory,
+  getLeadHistoryMap,
+  normalizeLeadPhone,
+  upsertLeadHistories,
+} from '@/lib/lead-history';
 import { getWnsClient, getWnsDbName } from '@/lib/lead-sync';
 
 const MAX_EXCEL_LEADS = 5000;
@@ -20,6 +26,8 @@ type ParsedLead = {
   lastAction: string;
   status: string;
   score: number;
+  messageCount: number;
+  isBlocked?: boolean;
 };
 
 export async function POST(request: NextRequest) {
@@ -73,30 +81,51 @@ export async function POST(request: NextRequest) {
 
     const client = await getWnsClient();
     const db = client.db(getWnsDbName());
+    const historyByPhone = await getLeadHistoryMap(
+      db,
+      leads.map((lead) => lead.normalizedPhone),
+    );
+    const eligibleLeads = leads
+      .map((lead) =>
+        applyLeadHistory(lead, historyByPhone.get(lead.normalizedPhone)),
+      )
+      .filter((lead) => !lead.isBlocked)
+      .sort(
+        (left, right) =>
+          left.messageCount - right.messageCount ||
+          left.name.localeCompare(right.name),
+      );
+    const skippedBlockedCount = leads.length - eligibleLeads.length;
+
     await db.collection('excelLeadImports').insertOne({
       _id: importId,
       fileName: file.name,
       sheetName: firstSheetName,
       totalRows: rows.length,
-      validRows: leads.length,
+      validRows: eligibleLeads.length,
+      skippedBlockedCount,
       importedAt,
     });
-    await db.collection('excelLeads').insertMany(
-      leads.map((lead, index) => ({
+    await upsertLeadHistories(db, eligibleLeads, { sourceFile: file.name });
+    if (eligibleLeads.length) {
+      await db.collection('excelLeads').insertMany(
+        eligibleLeads.map((lead, index) => ({
         ...lead,
         importId,
         rowNumber: index + 2,
         importedAt,
       })),
-    );
+      );
+    }
 
     return NextResponse.json({
       status: 'uploaded',
       importId: importId.toString(),
       fileName: file.name,
       totalRows: rows.length,
-      validRows: leads.length,
-      leads: leads.map(toClientLead),
+      validRows: eligibleLeads.length,
+      skippedBlockedCount,
+      leads: eligibleLeads.map(toClientLead),
     });
   } catch (error) {
     return NextResponse.json(
@@ -125,7 +154,7 @@ function parseLeads(rows: Record<string, unknown>[], importId: ObjectId) {
       'whatsapp',
       'whatsapp number',
     ]);
-    const normalizedPhone = normalizePhone(phone);
+    const normalizedPhone = normalizeLeadPhone(phone);
     if (!name || !normalizedPhone || seenPhones.has(normalizedPhone)) continue;
     seenPhones.add(normalizedPhone);
     leads.push({
@@ -140,6 +169,7 @@ function parseLeads(rows: Record<string, unknown>[], importId: ObjectId) {
       lastAction: 'Uploaded from Excel',
       status: 'Ready',
       score: 50,
+      messageCount: 0,
     });
   }
   return leads;
@@ -161,12 +191,6 @@ function normalizeHeader(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-function normalizePhone(value: string) {
-  const digits = value.replace(/[^\d]/g, '');
-  if (digits.length === 10) return `91${digits}`;
-  return digits;
-}
-
 function toClientLead(lead: ParsedLead) {
   return {
     id: lead.crmLeadId,
@@ -179,5 +203,7 @@ function toClientLead(lead: ParsedLead) {
     lastAction: lead.lastAction,
     status: lead.status,
     score: lead.score,
+    messageCount: lead.messageCount,
+    isBlocked: Boolean(lead.isBlocked),
   };
 }

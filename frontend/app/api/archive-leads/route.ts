@@ -3,6 +3,11 @@ import type { NextRequest } from 'next/server';
 
 import { isAuthenticated, unauthorizedResponse } from '@/lib/auth';
 import {
+  applyLeadHistory,
+  getBlockedPhones,
+  getLeadHistoryMap,
+} from '@/lib/lead-history';
+import {
   buildWnsFilter,
   cleanLocationOptions,
   getLeadCollectionName,
@@ -36,6 +41,10 @@ export async function GET(request: NextRequest) {
       getLeadCollectionName(),
     );
     const filter = buildWnsFilter({ cities, courses, search });
+    const blockedPhones = await getBlockedPhones(db);
+    if (blockedPhones.length) {
+      filter.normalizedPhone = { $nin: blockedPhones };
+    }
     const skip = (page - 1) * limit;
 
     const [
@@ -49,13 +58,23 @@ export async function GET(request: NextRequest) {
       collection.countDocuments(filter),
       collection
         .find(filter)
-        .sort({ crmUpdatedAt: -1, crmCreatedAt: -1, syncedAt: -1 })
+        .sort({
+          messageCount: 1,
+          crmUpdatedAt: -1,
+          crmCreatedAt: -1,
+          syncedAt: -1,
+        })
         .skip(skip)
         .limit(limit)
         .toArray(),
       collection.distinct('city', {}),
       collection.findOne({}, { sort: { syncedAt: -1 } }),
     ]);
+
+    const historyByPhone = await getLeadHistoryMap(
+      db,
+      docs.map((doc) => doc.normalizedPhone || doc.phone),
+    );
 
     return NextResponse.json({
       status: 'connected',
@@ -64,7 +83,14 @@ export async function GET(request: NextRequest) {
       page,
       limit,
       totalPages: Math.max(Math.ceil(filteredCount / limit), 1),
-      leads: docs.map(toArchiveLead),
+      leads: docs.map((doc) =>
+        toArchiveLead(
+          applyLeadHistory(
+            doc,
+            historyByPhone.get(doc.normalizedPhone || doc.phone),
+          ),
+        ),
+      ),
       cities: cleanLocationOptions(cityFacets),
       courses: WNS_COURSE_OPTIONS,
       collection: getLeadCollectionName(),
